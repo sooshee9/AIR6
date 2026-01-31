@@ -10,6 +10,7 @@ import React from 'react';
 import { useState } from 'react';
 
 import LoginPage from './LoginPage';
+import SyncStatus from './components/SyncStatus';
 import IndentModule from './modules/IndentModule';
 import PurchaseModule from './modules/PurchaseModule';
 import VendorDeptModule from './modules/VendorDeptModule';
@@ -49,6 +50,7 @@ function App() {
         <h1 style={{ margin: 0, fontSize: 28, letterSpacing: 1, textAlign: 'center' }}>Airtech Inventory ERP System</h1>
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 10 }}>
           <span style={{ fontWeight: 500, fontSize: 16 }}>{user.email}</span>
+          <div style={{ marginLeft: 8 }}><SyncStatus /></div>
           <button onClick={() => setUser(null)} style={{ background: '#fff', color: '#1a237e', border: 'none', borderRadius: 4, padding: '6px 14px', fontWeight: 500, cursor: 'pointer' }}>Logout</button>
         </div>
       </header>

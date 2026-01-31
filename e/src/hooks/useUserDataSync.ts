@@ -53,11 +53,21 @@ export const useUserDataSync = (user: any) => {
 
       if (!remote) {
         const snapshot = collectLocalData(initialKeys);
-        await setUserData(uid, snapshot);
-        saveRef.current.lastSaved = JSON.stringify(snapshot);
+        try {
+          bus.dispatchEvent(new CustomEvent('userData.sync.initializing', { detail: { uid, keys: Object.keys(snapshot), ts: Date.now() } }));
+          await setUserData(uid, snapshot);
+          saveRef.current.lastSaved = JSON.stringify(snapshot);
+          bus.dispatchEvent(new CustomEvent('userData.sync.initialized', { detail: { uid, keys: Object.keys(snapshot), ts: Date.now() } }));
+          console.log('[userDataSync] Initialized remote userData for', uid, Object.keys(snapshot));
+        } catch (e) {
+          bus.dispatchEvent(new CustomEvent('userData.sync.error', { detail: { uid, error: String(e), ts: Date.now() } }));
+          console.error('[userDataSync] initialize failed', e);
+        }
       } else {
         applyLocalData(remote);
         saveRef.current.lastSaved = JSON.stringify(collectLocalData(Object.keys(remote)));
+        bus.dispatchEvent(new CustomEvent('userData.sync.applied', { detail: { uid, keys: Object.keys(remote), ts: Date.now() } }));
+        console.log('[userDataSync] Applied remote userData for', uid, Object.keys(remote));
       }
 
       // Subscribe to remote changes
@@ -65,6 +75,8 @@ export const useUserDataSync = (user: any) => {
         if (!remoteData) return;
         // Apply remote data to localStorage
         applyLocalData(remoteData);
+        bus.dispatchEvent(new CustomEvent('userData.sync.remoteUpdate', { detail: { uid, keys: Object.keys(remoteData), ts: Date.now() } }));
+        console.log('[userDataSync] Remote update applied for', uid, Object.keys(remoteData));
       });
 
       // Periodically check localStorage changes and save (debounced-ish)
@@ -75,8 +87,16 @@ export const useUserDataSync = (user: any) => {
           const keys = Array.from(new Set([...DEFAULT_KEYS, ...Object.keys(localStorage)]));
           const current = JSON.stringify(collectLocalData(keys));
           if (saveRef.current.lastSaved !== current) {
-            await setUserData(uid, collectLocalData(keys));
-            saveRef.current.lastSaved = current;
+            try {
+              bus.dispatchEvent(new CustomEvent('userData.sync.saving', { detail: { uid, keys, ts: Date.now() } }));
+              await setUserData(uid, collectLocalData(keys));
+              saveRef.current.lastSaved = current;
+              bus.dispatchEvent(new CustomEvent('userData.sync.saved', { detail: { uid, keys, ts: Date.now() } }));
+              console.log('[userDataSync] Saved userData for', uid, keys);
+            } catch (e) {
+              bus.dispatchEvent(new CustomEvent('userData.sync.error', { detail: { uid, error: String(e), ts: Date.now() } }));
+              console.error('[userDataSync] save failed', e);
+            }
           }
         } catch (e) {
           console.error('[userDataSync] save failed', e);
@@ -84,6 +104,8 @@ export const useUserDataSync = (user: any) => {
       };
 
       saveRef.current.intervalId = setInterval(checkAndSave, 2500);
+      bus.dispatchEvent(new CustomEvent('userData.sync.started', { detail: { uid, ts: Date.now() } }));
+      console.log('[userDataSync] background sync started for', uid);
 
     })();
 
