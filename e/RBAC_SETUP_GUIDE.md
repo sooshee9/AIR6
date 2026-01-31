@@ -126,6 +126,18 @@ export const roleModuleAccess: Record<string, string[]> = {
 1. Add the role and its module access in `src/config/roleModuleConfig.ts`
 2. Create user documents in Firestore with the new role
 
+## Programmatic user creation (optional)
+You can add user documents programmatically using a small admin script. This is handy for repeatable setups or CI.
+
+Steps:
+1. Place your Firebase service account JSON file locally (do NOT commit it) at the repo root as `serviceAccountKey.json`, or set env var `FIREBASE_SERVICE_ACCOUNT_JSON` to its path.
+2. Install the admin SDK (or run `npm install` to pick up dev dependencies):
+   - `npm install --save-dev firebase-admin`
+3. Run the script:
+   - `npm run add-user -- --uid <UID> --role <role> --email user@example.com --displayName "Name" --permissions "p1,p2"`
+
+This script writes/merges the document into the `users` collection with the provided UID and role.
+
 ### Checking Permissions in Components
 Use the `useAccessControl` hook:
 
