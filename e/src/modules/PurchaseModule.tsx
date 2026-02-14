@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import bus from '../utils/eventBus';
+import { subscribeFirestoreDocs, replaceFirestoreCollection } from '../utils/firestoreSync';
 
 interface PurchaseEntry {
   orderPlaceDate: string;
@@ -23,12 +24,27 @@ interface PurchaseEntry {
   remarks: string;
 }
 
+interface PurchaseModuleProps {
+  user?: any;
+}
+
 const indentStatusOptions = ["Open", "Closed", "Partial"];
 
-const PurchaseModule: React.FC = () => {
+const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
+  // Get uid from user prop or use a default
+  const [uid] = useState<string>(user?.uid || 'default-user');
+
   const [entries, setEntries] = useState<PurchaseEntry[]>([]);
   const [itemNames, setItemNames] = useState<string[]>([]);
   const [lastImport, setLastImport] = useState<number>(0);
+  
+  // Real-time Firestore data
+  const [openIndentItems, setOpenIndentItems] = useState<any[]>([]);
+  const [closedIndentItems, setClosedIndentItems] = useState<any[]>([]);
+  const [_stockRecords, setStockRecords] = useState<any[]>([]);
+  const [indentData, setIndentData] = useState<any[]>([]);
+  const [_itemMasterData, setItemMasterData] = useState<any[]>([]);
+  const [_psirData, setPsirData] = useState<any[]>([]);
 
   const [newEntry, setNewEntry] = useState<PurchaseEntry>({
     orderPlaceDate: "",
@@ -58,28 +74,38 @@ const PurchaseModule: React.FC = () => {
   const [debugOutput, setDebugOutput] = useState<string>('');
   const [lastDebugRun, setLastDebugRun] = useState<number | null>(null);
 
+  // Subscribe to Firestore collections
+  useEffect(() => {
+    const unsubOpen = subscribeFirestoreDocs(uid, 'openIndentItems', setOpenIndentItems);
+    const unsubClosed = subscribeFirestoreDocs(uid, 'closedIndentItems', setClosedIndentItems);
+    const unsubStock = subscribeFirestoreDocs(uid, 'stock-records', setStockRecords);
+    const unsubIndent = subscribeFirestoreDocs(uid, 'indentData', setIndentData);
+    const unsubItemMaster = subscribeFirestoreDocs(uid, 'itemMasterData', setItemMasterData);
+    const unsubPsir = subscribeFirestoreDocs(uid, 'psirData', setPsirData);
+    
+    return () => {
+      unsubOpen();
+      unsubClosed();
+      unsubStock();
+      unsubIndent();
+      unsubItemMaster();
+      unsubPsir();
+    };
+  }, [uid]);
+
   // 🎯 FIXED: Get status from indent source (open/closed indents)
   const getStatusFromIndent = (item: any): string => {
-    const openIndentRaw = localStorage.getItem('openIndentItems');
-    const closedIndentRaw = localStorage.getItem('closedIndentItems');
+    const isInOpen = openIndentItems.some((openItem: any) => 
+      openItem.indentNo === item.indentNo && 
+      (openItem.itemCode === item.itemCode || openItem.Code === item.itemCode)
+    );
+    if (isInOpen) return "Open";
     
-    if (openIndentRaw) {
-      const openIndentItems = JSON.parse(openIndentRaw);
-      const isInOpen = openIndentItems.some((openItem: any) => 
-        openItem.indentNo === item.indentNo && 
-        (openItem.itemCode === item.itemCode || openItem.Code === item.itemCode)
-      );
-      if (isInOpen) return "Open";
-    }
-    
-    if (closedIndentRaw) {
-      const closedIndentItems = JSON.parse(closedIndentRaw);
-      const isInClosed = closedIndentItems.some((closedItem: any) => 
-        closedItem.indentNo === item.indentNo && 
-        (closedItem.itemCode === item.itemCode || closedItem.Code === item.itemCode)
-      );
-      if (isInClosed) return "Closed";
-    }
+    const isInClosed = closedIndentItems.some((closedItem: any) => 
+      closedItem.indentNo === item.indentNo && 
+      (closedItem.itemCode === item.itemCode || closedItem.Code === item.itemCode)
+    );
+    if (isInClosed) return "Closed";
     
     return "Open"; // Default if not found
   };
@@ -230,15 +256,15 @@ const PurchaseModule: React.FC = () => {
                 return av;
               }
             }
-            const indentDataRaw = localStorage.getItem('indentData');
-            const indentData = indentDataRaw ? JSON.parse(indentDataRaw) : [];
+            // Use Firestore indentData from state instead of localStorage
+            const indents = indentData;
 
             // find the indices for this indent/item within indentData
             let found = false;
             let targetIndentIdx = -1;
             let targetItemIdx = -1;
-            for (let i = 0; i < indentData.length && !found; i++) {
-              const ind = indentData[i];
+            for (let i = 0; i < indents.length && !found; i++) {
+              const ind = indents[i];
               if (!ind || !Array.isArray(ind.items)) continue;
               if (normalizeField(ind.indentNo) !== itemIndentNo) continue;
               for (let j = 0; j < ind.items.length; j++) {
@@ -749,9 +775,9 @@ const PurchaseModule: React.FC = () => {
         date: '2025-11-20' 
       }
     ];
-    localStorage.setItem('openIndentItems', JSON.stringify(sampleOpen));
-    localStorage.setItem('closedIndentItems', JSON.stringify(sampleClosed));
-    setDebugOutput(prev => prev + '\n\n✅ Seeded sample indent items into localStorage.');
+    replaceFirestoreCollection(uid, 'openIndentItems', sampleOpen).catch(err => console.error(err));
+    replaceFirestoreCollection(uid, 'closedIndentItems', sampleClosed).catch(err => console.error(err));
+    setDebugOutput(prev => prev + '\n\n✅ Seeded sample indent items into Firestore.');
   };
 
   const clearDebugOutput = () => { setDebugOutput(''); };
@@ -759,8 +785,8 @@ const PurchaseModule: React.FC = () => {
   // Save function
   const saveEntries = (data: PurchaseEntry[]): PurchaseEntry[] => {
     console.log('[PurchaseModule] Saving data:', data);
-    localStorage.setItem("purchaseData", JSON.stringify(data));
-    localStorage.setItem("purchaseOrders", JSON.stringify(data));
+    replaceFirestoreCollection(uid, 'purchaseData', data).catch(err => console.error(err));
+    replaceFirestoreCollection(uid, 'purchaseOrders', data).catch(err => console.error(err));
     
     try {
       bus.dispatchEvent(new CustomEvent('purchaseOrders.updated', { detail: data }));
@@ -868,34 +894,35 @@ const PurchaseModule: React.FC = () => {
     }
   };
 
-  // Load saved entries
+  // Load saved entries from Firestore
   useEffect(() => {
-    console.log('[PurchaseModule] Loading data from purchaseData');
-    const purchaseData = localStorage.getItem("purchaseData");
+    console.log('[PurchaseModule] Loading data from Firestore (purchaseData)');
     
-    if (purchaseData) {
-      try {
-        const parsedData = JSON.parse(purchaseData);
-        // Ensure older data shapes are migrated to include `originalIndentQty`, `purchaseQty`, and `currentStock` fields
-        const migratedData = parsedData.map((entry: any) => ({
-          ...entry,
-          originalIndentQty: entry.originalIndentQty ?? entry.qty ?? 0,
-          purchaseQty: entry.purchaseQty ?? entry.poQty ?? entry.qty ?? 0,
-          currentStock: entry.currentStock ?? entry.inStock ?? 0,
-          okQty: entry.okQty ?? 0,
-          receivedQty: entry.receivedQty ?? 0,
-          rejectedQty: entry.rejectedQty ?? 0,
-        }));
-
-        setEntries(migratedData);
-      } catch (error) {
-        console.error('[PurchaseModule] Error parsing purchaseData:', error);
+    const unsub = subscribeFirestoreDocs(uid, 'purchaseData', (docs) => {
+      if (docs && docs.length > 0) {
+        try {
+          // Ensure data shape is correct
+          const migratedData = docs.map((entry: any) => ({
+            ...entry,
+            originalIndentQty: entry.originalIndentQty ?? entry.qty ?? 0,
+            purchaseQty: entry.purchaseQty ?? entry.poQty ?? entry.qty ?? 0,
+            currentStock: entry.currentStock ?? entry.inStock ?? 0,
+            okQty: entry.okQty ?? 0,
+            receivedQty: entry.receivedQty ?? 0,
+            rejectedQty: entry.rejectedQty ?? 0,
+          }));
+          setEntries(migratedData);
+        } catch (error) {
+          console.error('[PurchaseModule] Error processing purchaseData:', error);
+          setEntries([]);
+        }
+      } else {
         setEntries([]);
       }
-    } else {
-      setEntries([]);
-    }
-  }, []);
+    });
+
+    return unsub;
+  }, [uid]);
 
   // 🎯 FIXED: Real-time updates - SYNC STATUS AND STOCK FROM INDENT MODULE
   useEffect(() => {

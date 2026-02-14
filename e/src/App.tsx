@@ -1,6 +1,5 @@
 
 
-
 import PSIRModule from './modules/PSIRModule';
 import VSIRModule from './modules/VSIRModule';
 import StockModule from './modules/StockModule';
@@ -16,29 +15,33 @@ import PurchaseModule from './modules/PurchaseModule';
 import VendorDeptModule from './modules/VendorDeptModule';
 import VendorIssueModule from './modules/VendorIssueModule';
 import InHouseIssueModule from './modules/InHouseIssueModule';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import './App.css';
+import { useUserRole } from './hooks/useUserRole';
+import { useUserDataSync } from './hooks/useUserDataSync';
 
-
-const modules: Record<string, React.ReactElement> = {
-  purchase: <PurchaseModule />,
-  indent: <IndentModule />,
-  vendorDept: <VendorDeptModule />,
-  vendorIssue: <VendorIssueModule />,
-  inHouseIssue: <InHouseIssueModule />,
-  psir: <PSIRModule />,
-  vsir: <VSIRModule />,
-  stock: <StockModule />,
-  itemMaster: <ItemMasterModule />,
-};
 
 
 function App() {
   const [activeModule, setActiveModule] = useState<'sales' | 'dc' | 'acuInventory' | 'acuInventoryDashboard' | 'purchase' | 'salesDashboard' | 'debitNote' | 'indent' | 'vendorDept' | 'vendorIssue' | 'inHouseIssue' | 'psir' | 'vsir' | 'stock' | 'itemMaster'>('purchase');
   const [user, setUser] = useState<any>(null);
   // Hook to fetch and create role/profile
-  const { userProfile: _userProfile } = require('./hooks/useUserRole').useUserRole(user);
+  const { userProfile: _userProfile } = useUserRole(user);
   // Hook to sync user data with Firestore (on login)
-  require('./hooks/useUserDataSync').useUserDataSync(user);
+  useUserDataSync(user);
+
+  // Build modules with user prop
+  const modulesWithUser: Record<string, React.ReactElement> = {
+    purchase: <PurchaseModule user={user} />,
+    indent: <IndentModule user={user} />,
+    vendorDept: <VendorDeptModule />,
+    vendorIssue: <VendorIssueModule />,
+    inHouseIssue: <InHouseIssueModule />,
+    psir: <PSIRModule />,
+    vsir: <VSIRModule />,
+    stock: <StockModule />,
+    itemMaster: <ItemMasterModule />,
+  };
 
   if (!user) {
     return <LoginPage onLogin={setUser} />;
@@ -55,7 +58,9 @@ function App() {
         </div>
       </header>
       <main style={{ maxWidth: 900, margin: '32px auto', background: '#fff', borderRadius: 8, boxShadow: '0 2px 12px #0002', padding: 32, minHeight: 400 }}>
-        {modules[activeModule]}
+        <ErrorBoundary>
+          {modulesWithUser[activeModule]}
+        </ErrorBoundary>
       </main>
       <footer style={{
         position: 'fixed',

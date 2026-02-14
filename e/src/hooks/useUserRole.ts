@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+import { useState, useEffect, useRef } from 'react';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { logger } from '../utils/logger';
 import type { User } from 'firebase/auth';
 
 interface UserProfile {
@@ -15,6 +16,7 @@ export const useUserRole = (user: User | null) => {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const fetchInProgressRef = useRef(false);
 
   useEffect(() => {
     const fetchUserRole = async () => {
@@ -24,6 +26,10 @@ export const useUserRole = (user: User | null) => {
         return;
       }
 
+      // Prevent duplicate fetches
+      if (fetchInProgressRef.current) return;
+      fetchInProgressRef.current = true;
+
       try {
         setLoading(true);
         const userDocRef = doc(db, 'users', user.uid);
@@ -32,8 +38,7 @@ export const useUserRole = (user: User | null) => {
         if (userDoc.exists()) {
           setUserProfile(userDoc.data() as UserProfile);
         } else {
-          // If user doc doesn't exist, create a default profile.
-          // Special-case: make a configured UID an admin immediately.
+          // If user doc doesn't exist, create a default profile
           const isSeededAdmin = user.uid === '4OzW9GTwokTOnza0A0e4DNclJ6H2';
           const defaultProfile: UserProfile = {
             email: user.email || '',
@@ -42,29 +47,30 @@ export const useUserRole = (user: User | null) => {
             displayName: user.displayName || 'User',
             createdAt: new Date(),
           };
+          
           try {
-            // Persist the user profile for future logins
-            (async () => {
-              await import('firebase/firestore').then(({ setDoc, doc }) => setDoc(doc(db, 'users', user.uid), defaultProfile));
-            })();
+            await setDoc(userDocRef, defaultProfile);
+            setUserProfile(defaultProfile);
           } catch (err) {
-            console.error('Failed to create user profile in Firestore:', err);
+            // Profile creation failed, but continue with default profile
+            logger.error('Failed to create user profile in Firestore:', err);
+            setUserProfile(defaultProfile);
           }
-          setUserProfile(defaultProfile);
         }
         setError(null);
       } catch (err) {
+        logger.error('Error fetching user role:', err);
         setError(
           err instanceof Error ? err.message : 'Failed to fetch user role'
         );
-        console.error('Error fetching user role:', err);
       } finally {
         setLoading(false);
+        fetchInProgressRef.current = false;
       }
     };
 
     fetchUserRole();
-  }, [user]);
+  }, [user?.uid]);
 
   return { userProfile, loading, error };
 };

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import bus from '../utils/eventBus';
 import * as XLSX from 'xlsx';
+import { subscribeFirestoreDocs, replaceFirestoreCollection } from '../utils/firestoreSync';
 
 interface IndentItem {
   model: string;
@@ -17,20 +18,55 @@ interface Indent {
   items: IndentItem[];
 }
 
-const IndentModule: React.FC = () => {
-  const [indents, setIndents] = useState<Indent[]>(() => {
-    const saved = localStorage.getItem('indentData');
-    if (!saved) return [];
-    try {
-      const parsed = JSON.parse(saved);
-      return parsed.map((indent: any) => ({
-        ...indent,
-        items: Array.isArray(indent.items) ? indent.items : [],
+interface IndentModuleProps {
+  user?: any;
+}
+
+const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
+  // Get uid from user prop or use a default
+  const [uid] = useState<string>(user?.uid || 'default-user');
+
+  const [indents, setIndents] = useState<Indent[]>([]);
+  const [itemMaster, setItemMaster] = useState<{ itemName: string; itemCode: string }[]>([]);
+  const [stockRecords, setStockRecords] = useState<any[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);
+
+  // Subscribe to Firestore collections on mount
+  useEffect(() => {
+    const unsubIndents = subscribeFirestoreDocs(uid, 'indentData', (docs) => {
+      const formattedIndents = docs.map(doc => ({
+        indentNo: doc.indentNo,
+        date: doc.date,
+        indentBy: doc.indentBy,
+        oaNo: doc.oaNo,
+        items: Array.isArray(doc.items) ? doc.items : [],
       }));
-    } catch {
-      return [];
-    }
-  });
+      setIndents(formattedIndents);
+    });
+
+    const unsubItemMaster = subscribeFirestoreDocs(uid, 'itemMasterData', (docs) => {
+      const formattedItems = docs.map(doc => ({
+        itemName: doc.itemName,
+        itemCode: doc.itemCode,
+      }));
+      setItemMaster(formattedItems);
+    });
+
+    const unsubStock = subscribeFirestoreDocs(uid, 'stock-records', (docs) => {
+      setStockRecords(docs);
+    });
+
+    const unsubPO = subscribeFirestoreDocs(uid, 'purchaseOrders', (docs) => {
+      setPurchaseOrders(docs);
+    });
+
+    return () => {
+      unsubIndents();
+      unsubItemMaster();
+      unsubStock();
+      unsubPO();
+    };
+  }, [uid]);
 
   function getNextIndentNo() {
     const base = 'S-8/25-';
@@ -114,39 +150,14 @@ const IndentModule: React.FC = () => {
   });
 
   const [editIdx, setEditIdx] = useState<number | null>(null);
-  const [itemNames, setItemNames] = useState<string[]>([]);
-  const [itemMaster, setItemMaster] = useState<{ itemName: string; itemCode: string }[]>([]);
+  const [_itemNames, _setItemNames] = useState<string[]>([]);
 
-  useEffect(() => {
-    const savedData = localStorage.getItem('indentData');
-    if (savedData) {
-      setIndents(JSON.parse(savedData));
-    }
-
-    const itemMasterRaw = localStorage.getItem('itemMasterData');
-    if (itemMasterRaw) {
-      try {
-        const parsed = JSON.parse(itemMasterRaw);
-        if (Array.isArray(parsed)) {
-          setItemMaster(parsed);
-          setItemNames(parsed.map((item: any) => item.itemName).filter(Boolean));
-        }
-      } catch {}
-    }
-  }, []);
 
   // Helper to get stock for an item
   const getStock = (itemCode: string) => {
-    try {
-      const stockRaw = localStorage.getItem('stock-records');
-      const stocks = stockRaw ? JSON.parse(stockRaw) : [];
-      const stock = stocks.find((s: any) => s.itemCode === itemCode);
-      const closingStock = stock && !isNaN(Number(stock.closingStock)) ? Number(stock.closingStock) : 0;
-      return closingStock;
-    } catch (err) {
-      console.error('[IndentModule] getStock error:', err);
-      return 0;
-    }
+    const stock = stockRecords.find((s: any) => s.itemCode === itemCode);
+    const closingStock = stock && !isNaN(Number(stock.closingStock)) ? Number(stock.closingStock) : 0;
+    return closingStock;
   };
 
   // FIXED: Calculate cumulative allocated qty up to a specific indent (including partial allocations from OPEN indents)
@@ -167,28 +178,17 @@ const IndentModule: React.FC = () => {
 
   // Get PO Quantity (Purchase Order Quantity) for an item
   const getPOQuantity = (itemCode: string) => {
-    try {
-      const poData = localStorage.getItem('purchaseOrders');
-      if (!poData) return 0;
-      
-      const purchaseOrders = JSON.parse(poData);
-      let totalPOQty = 0;
-      
-      purchaseOrders.forEach((po: any) => {
-        if (po.items && Array.isArray(po.items)) {
-          po.items.forEach((item: any) => {
-            if (item.itemCode === itemCode) {
-              totalPOQty += Number(item.qty) || 0;
-            }
-          });
-        }
-      });
-      
-      return totalPOQty;
-    } catch (err) {
-      console.error('[IndentModule] getPOQuantity error:', err);
-      return 0;
-    }
+    let totalPOQty = 0;
+    purchaseOrders.forEach((po: any) => {
+      if (po.items && Array.isArray(po.items)) {
+        po.items.forEach((item: any) => {
+          if (item.itemCode === itemCode) {
+            totalPOQty += Number(item.qty) || 0;
+          }
+        });
+      }
+    });
+    return totalPOQty;
   };
 
   // FIXED: Enhanced function (prefixed with underscore because it's not used directly)
@@ -329,7 +329,12 @@ const IndentModule: React.FC = () => {
     const indentNo = getNextIndentNo();
     const updated = [...indents, { ...newIndent, indentNo }];
     setIndents(updated);
-    localStorage.setItem('indentData', JSON.stringify(updated));
+    
+    // Save to Firestore instead of localStorage
+    replaceFirestoreCollection(uid, 'indentData', updated).catch(err => {
+      console.error('Failed to save indent data to Firestore:', err);
+      alert('Failed to save indent. Please try again.');
+    });
 
     // Reset form
     setNewIndent({ indentNo: getNextIndentNo(), date: '', indentBy: '', oaNo: '', items: [] });
@@ -398,8 +403,14 @@ const IndentModule: React.FC = () => {
       });
 
       console.log('[IndentModule] Saving indent items:', { openItemsCount: openItems.length, closedItemsCount: closedItems.length });
-      localStorage.setItem('openIndentItems', JSON.stringify(openItems));
-      localStorage.setItem('closedIndentItems', JSON.stringify(closedItems));
+      
+      // Save to Firestore instead of localStorage
+      replaceFirestoreCollection(uid, 'openIndentItems', openItems).catch(err => {
+        console.error('Failed to save open indent items:', err);
+      });
+      replaceFirestoreCollection(uid, 'closedIndentItems', closedItems).catch(err => {
+        console.error('Failed to save closed indent items:', err);
+      });
 
       try {
         bus.dispatchEvent(new CustomEvent('indents.updated', { detail: { openItems, closedItems } }));
@@ -544,7 +555,7 @@ const IndentModule: React.FC = () => {
 
       <div style={{ marginBottom: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <label>Item Name:</label>
-        {itemNames.length > 0 ? (
+        {_itemNames.length > 0 ? (
           <select 
             name="itemName" 
             value={itemInput.model} 
@@ -552,7 +563,7 @@ const IndentModule: React.FC = () => {
             style={{ padding: 8, borderRadius: 4, border: '1px solid #ccc' }}
           >
             <option value="">Select Item Name</option>
-            {itemNames.map(name => (
+            {_itemNames.map(name => (
               <option key={name} value={name}>{name}</option>
             ))}
           </select>
@@ -778,7 +789,9 @@ const IndentModule: React.FC = () => {
                             };
                           }).filter(ind => ind.items.length > 0);
                           setIndents(updatedIndents);
-                          localStorage.setItem('indentData', JSON.stringify(updatedIndents));
+                          replaceFirestoreCollection(uid, 'indentData', updatedIndents).catch(err => {
+                            console.error('Failed to update indent data:', err);
+                          });
                         }}
                         style={{
                           background: '#e53935',

@@ -1595,11 +1595,13 @@ const PSIRModule: React.FC = () => {
                 </tr>
             </thead>
             <tbody>
-              {newPSIR.items.map((item, idx) => (
+              {(newPSIR.items || []).map((item, idx) => {
+                const poQty = getPOQtyFor(newPSIR.poNo, newPSIR.indentNo, item.itemCode) || 0;
+                return (
                 <tr key={idx}>
                   <td>{item.itemName}</td>
                   <td>{item.itemCode}</td>
-                  <td>{Math.abs(getPOQtyFor(newPSIR.poNo, newPSIR.indentNo, item.itemCode))}</td>
+                  <td>{Math.abs(poQty)}</td>
                   <td>{item.qtyReceived}</td>
                   <td>{item.okQty}</td>
                   <td>{item.rejectQty}</td>
@@ -1609,7 +1611,8 @@ const PSIRModule: React.FC = () => {
                     <button onClick={() => handleEditItem(idx)}>Edit</button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1656,7 +1659,9 @@ const PSIRModule: React.FC = () => {
             </tr>
           ) : (
             psirs.flatMap((psir, psirIdx) => 
-              psir.items.map((item, itemIdx) => (
+              (psir?.items || []).map((item, itemIdx) => {
+                const poQty = getPOQtyFor(psir.poNo, psir.indentNo, item.itemCode) || 0;
+                return (
                 <tr key={`${psirIdx}-${itemIdx}`}>
                   <td>{psir.receivedDate}</td>
                   <td>{psir.indentNo}</td>
@@ -1667,7 +1672,7 @@ const PSIRModule: React.FC = () => {
                   <td>{psir.supplierName}</td>
                   <td>{item.itemName}</td>
                   <td>{item.itemCode}</td>
-                  <td>{Math.abs(getPOQtyFor(psir.poNo, psir.indentNo, item.itemCode))}</td>
+                  <td>{Math.abs(poQty)}</td>
                   <td>{item.qtyReceived}</td>
                   <td>{item.okQty}</td>
                   <td>{item.rejectQty}</td>
@@ -1693,7 +1698,8 @@ const PSIRModule: React.FC = () => {
                     </button>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )
           )}
         </tbody>
