@@ -1,4 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
 
 interface ItemMasterRecord {
   itemName: string;
@@ -29,14 +33,43 @@ const ItemMasterModule: React.FC = () => {
   });
   const [editIdx, setEditIdx] = useState<number | null>(null);
 
-  // Save records to localStorage whenever they change
+  // Save records to localStorage whenever they change (preserve behaviour until migrated)
   useEffect(() => {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(records));
   }, [records]);
 
+  // Migrate existing localStorage item master entries into Firestore on sign-in
   useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(records));
-  }, [records]);
+    const unsub = onAuthStateChanged(auth, (u) => {
+      const uid = u ? u.uid : null;
+      if (uid) {
+        (async () => {
+          try {
+            const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (raw) {
+              const arr = JSON.parse(raw || '[]');
+              if (Array.isArray(arr) && arr.length > 0) {
+                for (const it of arr) {
+                  try {
+                    const payload = { ...it } as any;
+                    if (typeof payload.id !== 'undefined') delete payload.id;
+                    const col = collection(db, 'users', uid, 'itemMaster');
+                    await addDoc(col, { ...payload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+                  } catch (err) {
+                    console.warn('[ItemMasterModule] migration addDoc failed for item', it, err);
+                  }
+                }
+                try { localStorage.removeItem(LOCAL_STORAGE_KEY); } catch {}
+              }
+            }
+          } catch (err) {
+            console.error('[ItemMasterModule] Migration failed:', err);
+          }
+        })();
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;

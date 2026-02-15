@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { subscribePsirs } from '../utils/psirService';
-import { subscribeVSIRRecords, addVSIRRecord, updateVSIRRecord, subscribeVendorDepts, getItemMaster, getVendorIssues, getPurchaseData } from '../utils/firestoreServices';
+import { subscribeVSIRRecords, addVSIRRecord, updateVSIRRecord, deleteVSIRRecord, subscribeVendorDepts, getItemMaster, getVendorIssues, getPurchaseData } from '../utils/firestoreServices';
 import bus from '../utils/eventBus';
 
 interface VSRIRecord {
@@ -80,6 +81,40 @@ const VSIRModule: React.FC = () => {
   const [psirData, setPsirData] = useState<any[]>([]);
   const [userUid, setUserUid] = useState<string | null>(null);
 
+  // Migrate existing localStorage `vsri-records` into Firestore on sign-in
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      const uid = u ? u.uid : null;
+      setUserUid(uid);
+      if (uid) {
+        (async () => {
+          try {
+            const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+            if (raw) {
+              const arr = JSON.parse(raw || '[]');
+              if (Array.isArray(arr) && arr.length > 0) {
+                for (const it of arr) {
+                  try {
+                    const payload = { ...it } as any;
+                    if (typeof payload.id !== 'undefined') delete payload.id;
+                    const col = collection(db, 'users', uid, 'vsirRecords');
+                    await addDoc(col, { ...payload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+                  } catch (err) {
+                    console.warn('[VSIRModule] migration addDoc failed for item', it, err);
+                  }
+                }
+                try { localStorage.removeItem(LOCAL_STORAGE_KEY); } catch {}
+              }
+            }
+          } catch (err) {
+            console.error('[VSIRModule] Migration failed:', err);
+          }
+        })();
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, []);
+
   // Load initial data
   useEffect(() => {
     const data = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -107,11 +142,11 @@ const VSIRModule: React.FC = () => {
 
     // Import from vendorIssueData (once on mount) - prefer Firestore-loaded vendorIssues
     try {
-      const vendorIssuesList = (userUid && Array.isArray(vendorIssues) && vendorIssues.length) ? vendorIssues : (localStorage.getItem('vendorIssueData') ? JSON.parse(localStorage.getItem('vendorIssueData') as string) : []);
+      const vendorIssuesList: any[] = (userUid && Array.isArray(vendorIssues) && vendorIssues.length) ? vendorIssues : (localStorage.getItem('vendorIssueData') ? JSON.parse(localStorage.getItem('vendorIssueData') as string) : []);
       if (vendorIssuesList && vendorIssuesList.length) {
         let cur = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]') as VSRIRecord[];
         let added = false;
-        vendorIssuesList.forEach(issue => {
+        vendorIssuesList.forEach((issue: any) => {
           if (!issue?.items) return;
           issue.items.forEach((it: any) => {
             const exists = cur.some(
@@ -181,7 +216,11 @@ const VSIRModule: React.FC = () => {
 
         // load one-time master collections
         (async () => {
-          try { const items = await getItemMaster(uid); setItemMaster(items || []); setItemNames((items||[]).map((i:any)=>i.itemName).filter(Boolean)); } catch (e) { console.error('[VSIR] getItemMaster failed', e); }
+          try {
+            const items = await getItemMaster(uid);
+            setItemMaster((items || []) as any[]);
+            setItemNames((items || []).map((i: any) => i.itemName).filter(Boolean));
+          } catch (e) { console.error('[VSIR] getItemMaster failed', e); }
           try { const p = await getPurchaseData(uid); setPurchaseData(p || []); } catch (e) { console.error('[VSIR] getPurchaseData failed', e); }
           try { const vi = await getVendorIssues(uid); setVendorIssues(vi || []); } catch (e) { console.error('[VSIR] getVendorIssues failed', e); }
         })();
@@ -461,7 +500,7 @@ const VSIRModule: React.FC = () => {
         let cur = (Array.isArray(records) && records.length) ? [...records] : (JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]') as VSRIRecord[]);
         console.log('[VSIR-DEBUG] syncVendorIssue: loaded', cur.length, 'records from state/storage');
         let added = false;
-        vendorIssuesList.forEach(issue => {
+        vendorIssuesList.forEach((issue: any) => {
           if (!issue?.items) return;
           issue.items.forEach((it: any) => {
             const exists = cur.some(

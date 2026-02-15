@@ -2,6 +2,9 @@ import React, { useState, useEffect } from 'react';
 import bus from '../utils/eventBus';
 import * as XLSX from 'xlsx';
 import { subscribeFirestoreDocs, replaceFirestoreCollection } from '../utils/firestoreSync';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 interface IndentItem {
   model: string;
@@ -27,6 +30,40 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
   const [uid] = useState<string>(user?.uid || 'default-user');
 
   const [indents, setIndents] = useState<Indent[]>([]);
+
+  // Migrate existing localStorage `indentData` into Firestore on sign-in
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      const uid = u ? u.uid : null;
+      if (uid) {
+        (async () => {
+          try {
+            const raw = localStorage.getItem('indentData');
+            if (raw) {
+              const arr = JSON.parse(raw || '[]');
+              if (Array.isArray(arr) && arr.length > 0) {
+                for (const it of arr) {
+                  try {
+                    const payload = { ...it } as any;
+                    if (typeof payload.id !== 'undefined') delete payload.id;
+                    const col = collection(db, 'userData', uid, 'indentData');
+                    await addDoc(col, { ...payload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+                  } catch (err) {
+                    console.warn('[IndentModule] migration addDoc failed for item', it, err);
+                  }
+                }
+                try { localStorage.removeItem('indentData'); } catch {}
+              }
+            }
+          } catch (err) {
+            console.error('[IndentModule] Migration failed:', err);
+          }
+        })();
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, []);
+
   const [itemMaster, setItemMaster] = useState<{ itemName: string; itemCode: string }[]>([]);
   const [stockRecords, setStockRecords] = useState<any[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<any[]>([]);

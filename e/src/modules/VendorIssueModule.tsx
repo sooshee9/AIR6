@@ -1,15 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import bus from '../utils/eventBus';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import {
   subscribeVendorIssues,
-  getVendorIssues,
   addVendorIssue,
   updateVendorIssue,
   deleteVendorIssue,
   subscribeVendorDepts,
-  getVendorDepts,
   getItemMaster,
   subscribeVSIRRecords,
 } from '../utils/firestoreServices';
@@ -24,6 +23,7 @@ interface VendorIssueItem {
 }
 
 interface VendorIssue {
+  id?: string;
   date: string;
   materialPurchasePoNo: string;
   oaNo: string;
@@ -81,6 +81,39 @@ const VendorIssueModule: React.FC = () => {
       return [];
     }
   });
+
+  // Migrate existing localStorage `vendorIssueData` into Firestore on sign-in
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      const uid = u ? u.uid : null;
+      if (uid) {
+        (async () => {
+          try {
+            const raw = localStorage.getItem('vendorIssueData');
+            if (raw) {
+              const arr = JSON.parse(raw || '[]');
+              if (Array.isArray(arr) && arr.length > 0) {
+                for (const it of arr) {
+                  try {
+                    const payload = { ...it } as any;
+                    if (typeof payload.id !== 'undefined') delete payload.id;
+                    const col = collection(db, 'userData', uid, 'vendorIssueData');
+                    await addDoc(col, { ...payload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+                  } catch (err) {
+                    console.warn('[VendorIssueModule] migration addDoc failed for item', it, err);
+                  }
+                }
+                try { localStorage.removeItem('vendorIssueData'); } catch {}
+              }
+            }
+          } catch (err) {
+            console.error('[VendorIssueModule] Migration failed:', err);
+          }
+        })();
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, []);
 
   const [newIssue, setNewIssue] = useState<VendorIssue>({
     date: '',

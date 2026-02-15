@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import bus from '../utils/eventBus';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../firebase';
+import { auth, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { addPsir, updatePsir, subscribePsirs } from '../utils/psirService';
+import { getItemMaster, getPurchaseData, getIndentData, getStockRecords, getPurchaseOrders, updatePurchaseData, updatePurchaseOrder } from '../utils/firestoreServices';
 
 interface PSIRItem {
   itemName: string;
@@ -39,27 +41,40 @@ interface PurchaseOrder {
 }
 
 const PSIRModule: React.FC = () => {
-  const [psirs, setPsirs] = useState<PSIR[]>(() => {
-    const saved = localStorage.getItem('psirData');
-    if (!saved) {
-      console.debug('[PSIRModule][Init] No psirData in localStorage');
-      return [];
-    }
-    try {
-      const parsed = JSON.parse(saved);
-      const validPsirs = Array.isArray(parsed)
-        ? parsed.map((psir: any) => ({
-            ...psir,
-            items: Array.isArray(psir.items) ? psir.items : [],
-          }))
-        : [];
-      console.debug('[PSIRModule][Init] Loaded psirData:', validPsirs);
-      return validPsirs;
-    } catch (e) {
-      console.error('[PSIRModule][Init] Error parsing psirData:', e);
-      return [];
-    }
-  });
+  const [psirs, setPsirs] = useState<PSIR[]>([]);
+
+  // Migrate existing localStorage `psirData` into Firestore on sign-in
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      const uid = u ? u.uid : null;
+      if (uid) {
+        (async () => {
+          try {
+            const raw = localStorage.getItem('psirData');
+            if (raw) {
+              const arr = JSON.parse(raw || '[]');
+              if (Array.isArray(arr) && arr.length > 0) {
+                for (const it of arr) {
+                  try {
+                    const payload = { ...it } as any;
+                    if (typeof payload.id !== 'undefined') delete payload.id;
+                    const col = collection(db, 'psirs');
+                    await addDoc(col, { ...payload, userId: uid, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+                  } catch (err) {
+                    console.warn('[PSIRModule] migration addDoc failed for item', it, err);
+                  }
+                }
+                try { localStorage.removeItem('psirData'); } catch {}
+              }
+            }
+          } catch (err) {
+            console.error('[PSIRModule] Migration failed:', err);
+          }
+        })();
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, []);
 
   const [newPSIR, setNewPSIR] = useState<PSIR>({
     receivedDate: '',
@@ -86,6 +101,10 @@ const PSIRModule: React.FC = () => {
   
   const [itemNames, setItemNames] = useState<string[]>([]);
   const [itemMaster, setItemMaster] = useState<{ itemName: string; itemCode: string }[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [purchaseData, setPurchaseData] = useState<any[]>([]);
+  const [indentData, setIndentData] = useState<any[]>([]);
+  const [stockRecords, setStockRecords] = useState<any[]>([]);
   const [editPSIRIdx, setEditPSIRIdx] = useState<number | null>(null);
   const [processedPOs, setProcessedPOs] = useState<Set<string>>(new Set());
   // Debug panel state
@@ -121,18 +140,42 @@ const PSIRModule: React.FC = () => {
     };
   }, [userUid]);
 
+  // Load purchase orders from Firestore
+  useEffect(() => {
+    const loadPurchaseOrders = async () => {
+      try {
+        if (!userUid) return;
+        const orders = await getPurchaseOrders(userUid);
+        if (Array.isArray(orders)) {
+          setPurchaseOrders(orders as any as PurchaseOrder[]);
+          if (orders.length > 0 && !newPSIR.poNo) {
+            const latestOrder: any = orders[orders.length - 1];
+            setNewPSIR(prev => ({
+              ...prev,
+              poNo: latestOrder.poNo || '',
+              supplierName: latestOrder.supplierName || '',
+              indentNo: latestOrder.indentNo || '',
+            }));
+          }
+          console.debug('[PSIRModule][Init] Loaded purchaseOrders from Firestore:', orders);
+        }
+      } catch (e) {
+        console.error('[PSIRModule][Init] Error loading purchaseOrders from Firestore:', e);
+      }
+    };
+    
+    loadPurchaseOrders();
+  }, [userUid]);
+
   // Enhanced auto-fill from Purchase Order when PO No changes
   useEffect(() => {
     if (!newPSIR.poNo) return;
-    
-    const purchaseOrdersRaw = localStorage.getItem('purchaseOrders');
-    if (!purchaseOrdersRaw) {
-      console.debug('[PSIRModule][AutoFill] No purchaseOrders in localStorage');
+    if (purchaseOrders.length === 0) {
+      console.debug('[PSIRModule][AutoFill] No purchaseOrders available');
       return;
     }
     
     try {
-      const purchaseOrders: PurchaseOrder[] = JSON.parse(purchaseOrdersRaw);
       const matchingPO = purchaseOrders.find(po => po.poNo === newPSIR.poNo);
       
       if (matchingPO) {
@@ -165,31 +208,23 @@ const PSIRModule: React.FC = () => {
           }
         }
         
-        // If PO record doesn't provide supplierName, try to find it from purchaseData rows
-        if (!matchingPO.supplierName) {
-          try {
-            const purchaseDataRaw = localStorage.getItem('purchaseData');
-            const purchaseData = purchaseDataRaw ? JSON.parse(purchaseDataRaw) : [];
-            if (Array.isArray(purchaseData) && purchaseData.length > 0) {
-              const found = purchaseData.find((p: any) => String(p.poNo || '').trim() === String(matchingPO.poNo || '').trim() || String(p.indentNo || '').trim() === String(matchingPO.indentNo || '').trim());
-              if (found && (found.supplierName || found.supplier)) {
-                const supplierVal = String(found.supplierName || found.supplier || '').trim();
-                if (supplierVal) {
-                  setNewPSIR(prev => ({ ...prev, supplierName: supplierVal }));
-                }
-              }
+        // If PO record doesn't provide supplierName, try to find it from purchaseData
+        if (!matchingPO.supplierName && purchaseData.length > 0) {
+          const found = purchaseData.find((p: any) => String(p.poNo || '').trim() === String(matchingPO.poNo || '').trim() || String(p.indentNo || '').trim() === String(matchingPO.indentNo || '').trim());
+          if (found && (found.supplierName || found.supplier)) {
+            const supplierVal = String(found.supplierName || found.supplier || '').trim();
+            if (supplierVal) {
+              setNewPSIR(prev => ({ ...prev, supplierName: supplierVal }));
             }
-          } catch (err) {
-            // ignore
           }
         }
 
         console.debug('[PSIRModule][AutoFill] Auto-filled from PO:', matchingPO);
       }
     } catch (e) {
-      console.error('[PSIRModule][AutoFill] Error parsing purchaseOrders:', e);
+      console.error('[PSIRModule][AutoFill] Error processing auto-fill:', e);
     }
-  }, [newPSIR.poNo]);
+  }, [newPSIR.poNo, purchaseOrders, purchaseData]);
 
   // Auto-fill Item Code when Item Name is selected
   useEffect(() => {
@@ -215,99 +250,57 @@ const PSIRModule: React.FC = () => {
     }
   }, [newPSIR.invoiceNo, psirs]);
 
-  // Load initial data
+  // Load initial data from Firestore
   useEffect(() => {
-    const savedData = localStorage.getItem('psirData');
-    if (savedData) {
+    const loadData = async () => {
       try {
-        const parsed = JSON.parse(savedData);
-        const validPsirs = Array.isArray(parsed)
-          ? parsed.map((psir: any) => ({
-              ...psir,
-              items: Array.isArray(psir.items) ? psir.items : [],
-            }))
-          : [];
-        setPsirs(validPsirs);
+        const [itemMasterData, purchaseDataData, indentDataData, stockDataData] = await Promise.all([
+          getItemMaster(userUid || ''),
+          getPurchaseData(userUid || ''),
+          getIndentData(userUid || ''),
+          getStockRecords(userUid || ''),
+        ]);
         
-        // Initialize processed POs from existing PSIRs
-        const existingPOs = new Set(validPsirs.map(psir => psir.poNo).filter(Boolean));
-        const existingIndents = new Set(validPsirs.map(psir => `INDENT::${psir.indentNo}`).filter(id => id !== 'INDENT::'));
-        const combined = new Set([...existingPOs, ...existingIndents]);
-        setProcessedPOs(combined);
+        if (Array.isArray(itemMasterData)) {
+          setItemMaster(itemMasterData as any as { itemName: string; itemCode: string }[]);
+          setItemNames((itemMasterData as any[]).map((item: any) => item.itemName).filter(Boolean));
+          console.debug('[PSIRModule][Init] Loaded itemMaster from Firestore:', itemMasterData);
+        }
         
-        console.debug('[PSIRModule][Init] Loaded psirData:', validPsirs);
-        console.debug('[PSIRModule][Init] Processed POs/Indents:', combined);
-      } catch (e) {
-        console.error('[PSIRModule][Init] Error parsing psirData:', e);
-      }
-    } else {
-      console.debug('[PSIRModule][Init] No psirData in localStorage');
-    }
+        if (Array.isArray(purchaseDataData)) {
+          setPurchaseData(purchaseDataData);
+          console.debug('[PSIRModule][Init] Loaded purchaseData from Firestore:', purchaseDataData);
+        }
 
-    const itemMasterRaw = localStorage.getItem('itemMasterData');
-    if (itemMasterRaw) {
-      try {
-        const parsed = JSON.parse(itemMasterRaw);
-        if (Array.isArray(parsed)) {
-          setItemMaster(parsed);
-          setItemNames(parsed.map((item: any) => item.itemName).filter(Boolean));
-          console.debug('[PSIRModule][Init] Loaded itemMaster:', parsed);
+        if (Array.isArray(indentDataData)) {
+          setIndentData(indentDataData);
+          console.debug('[PSIRModule][Init] Loaded indentData from Firestore:', indentDataData);
+        }
+
+        if (Array.isArray(stockDataData)) {
+          setStockRecords(stockDataData);
+          console.debug('[PSIRModule][Init] Loaded stockRecords from Firestore:', stockDataData);
         }
       } catch (e) {
-        console.error('[PSIRModule][Init] Error parsing itemMasterData:', e);
+        console.error('[PSIRModule][Init] Error loading initial data from Firestore:', e);
       }
-    }
+    };
 
-    const purchaseOrdersRaw = localStorage.getItem('purchaseOrders');
-    if (purchaseOrdersRaw) {
-      try {
-        const parsed: PurchaseOrder[] = JSON.parse(purchaseOrdersRaw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const latestOrder = parsed[parsed.length - 1];
-          setNewPSIR(prev => ({
-            ...prev,
-            poNo: latestOrder.poNo || '',
-            supplierName: latestOrder.supplierName || '',
-            indentNo: latestOrder.indentNo || '',
-          }));
-          console.debug('[PSIRModule][Init] Auto-populated from purchaseOrders:', latestOrder);
-        } else {
-          console.debug('[PSIRModule][Init] purchaseOrders is empty or invalid');
-        }
-      } catch (e) {
-        console.error('[PSIRModule][Init] Error parsing purchaseOrders:', e);
-      }
-    } else {
-      console.debug('[PSIRModule][Init] No purchaseOrders in localStorage');
+    if (userUid) {
+      loadData();
     }
-  }, []);
+  }, [userUid]);
 
   // Import ALL purchase orders/indents to PSIR
   const importAllPurchaseOrdersToPSIR = () => {
     try {
-      const purchaseOrdersRaw = localStorage.getItem('purchaseOrders');
-      if (!purchaseOrdersRaw) {
-        alert('No purchase orders found in localStorage');
-        return;
-      }
-
-      const purchaseOrders: PurchaseOrder[] = JSON.parse(purchaseOrdersRaw);
-      if (!Array.isArray(purchaseOrders) || purchaseOrders.length === 0) {
-        alert('No purchase orders available to import');
+      if (purchaseOrders.length === 0) {
+        alert('No purchase orders found');
         return;
       }
 
       let importedCount = 0;
       const newPSIRs: PSIR[] = [];
-
-      // Load purchaseData to get oaNo information from purchase module
-      let purchaseData: any[] = [];
-      try {
-        const purchaseDataRaw = localStorage.getItem('purchaseData');
-        purchaseData = purchaseDataRaw ? JSON.parse(purchaseDataRaw) : [];
-      } catch (err) {
-        console.error('[PSIRModule] Error loading purchaseData:', err);
-      }
 
       purchaseOrders.forEach((order) => {
         const poNo = String(order.poNo || '').trim();
@@ -384,9 +377,6 @@ const PSIRModule: React.FC = () => {
           } else {
             // Fallback to purchaseData lookup
             try {
-              const purchaseDataRaw = localStorage.getItem('purchaseData');
-              const purchaseData = purchaseDataRaw ? JSON.parse(purchaseDataRaw) : [];
-              
               const matched = Array.isArray(purchaseData) ? purchaseData.filter((p: any) => {
                 const pPo = String(p.poNo || '').trim();
                 const pIndent = String(p.indentNo || '').trim();
@@ -462,7 +452,15 @@ const PSIRModule: React.FC = () => {
           if (updated) {
             updatedPsirs[existingIdx] = newRec;
             setPsirs(updatedPsirs);
-            localStorage.setItem('psirData', JSON.stringify(updatedPsirs));
+            if (userUid && (newRec as any).id) {
+              (async () => {
+                try {
+                  await updatePsir((newRec as any).id, newRec);
+                } catch (e) {
+                  console.error('[PSIRModule] Failed to update PSIR in Firestore', e);
+                }
+              })();
+            }
             try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updatedPsirs } })); } catch (err) {}
             importedCount++;
             setProcessedPOs(prev => new Set([...prev, orderKey]));
@@ -492,7 +490,17 @@ const PSIRModule: React.FC = () => {
       if (importedCount > 0) {
         setPsirs(prev => {
           const updated = [...prev, ...newPSIRs];
-          localStorage.setItem('psirData', JSON.stringify(updated));
+          newPSIRs.forEach(psir => {
+            if (userUid) {
+              (async () => {
+                try {
+                  await addPsir(userUid, psir);
+                } catch (e) {
+                  console.error('[PSIRModule] Failed to add PSIR to Firestore', e);
+                }
+              })();
+            }
+          });
           try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
           return updated;
         });
@@ -598,22 +606,12 @@ const PSIRModule: React.FC = () => {
           await addPsir(userUid, { ...psirToSave, items: normalizedItems });
           // processedPOs will be updated from onSnapshot data
         } catch (e) {
-          console.error('[PSIRModule] Failed to add PSIR to Firestore, falling back to localStorage', e);
-          const updated = [...psirs, { ...psirToSave, items: normalizedItems }];
-          setPsirs(updated);
-          localStorage.setItem('psirData', JSON.stringify(updated));
-          try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
-          if (psirToSave.poNo) setProcessedPOs(prev => new Set([...prev, psirToSave.poNo]));
-          if (psirToSave.indentNo) setProcessedPOs(prev => new Set([...prev, `INDENT::${psirToSave.indentNo}`]));
+          console.error('[PSIRModule] Failed to add PSIR to Firestore', e);
+          alert('Error saving to Firestore: ' + String(e));
         }
       })();
     } else {
-      const updated = [...psirs, { ...psirToSave, items: normalizedItems }];
-      setPsirs(updated);
-      localStorage.setItem('psirData', JSON.stringify(updated));
-      try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
-      if (psirToSave.poNo) setProcessedPOs(prev => new Set([...prev, psirToSave.poNo]));
-      if (psirToSave.indentNo) setProcessedPOs(prev => new Set([...prev, `INDENT::${psirToSave.indentNo}`]));
+      alert('User not authenticated');
     }
 
     setNewPSIR({ receivedDate: '', indentNo: '', poNo: '', oaNo: '', batchNo: '', invoiceNo: '', supplierName: '', items: [] });
@@ -657,15 +655,13 @@ const PSIRModule: React.FC = () => {
           await updatePsir(docId, { ...psirToSave, items: psirToSave.items.map(it => ({ ...it, poQty: getPOQtyFor(psirToSave.poNo, psirToSave.indentNo, it.itemCode) })) });
           // onSnapshot will update local state
         } catch (e) {
-          console.error('[PSIRModule] Failed to update PSIR in Firestore, falling back to local update', e);
-          setPsirs(updatedLocal);
-          localStorage.setItem('psirData', JSON.stringify(updatedLocal));
-          try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updatedLocal } })); } catch (err) {}
+          console.error('[PSIRModule] Failed to update PSIR in Firestore', e);
+          alert('Error updating in Firestore: ' + String(e));
         }
       })();
     } else {
+      // Fallback for unauthenticated users: update local state only
       setPsirs(updatedLocal);
-      localStorage.setItem('psirData', JSON.stringify(updatedLocal));
       try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updatedLocal } })); } catch (err) {}
     }
 
@@ -691,7 +687,19 @@ const PSIRModule: React.FC = () => {
           return { ...p, items: p.items.filter((_, idx) => idx !== itemIdx) };
         })
         .filter(p => p.items.length > 0);
-      localStorage.setItem('psirData', JSON.stringify(updated));
+      
+      // Update in Firestore
+      const target = prevPsirs[psirIdx];
+      if (userUid && (target as any).id) {
+        (async () => {
+          try {
+            await updatePsir((target as any).id, updated[psirIdx]);
+          } catch (e) {
+            console.error('[PSIRModule] Failed to update PSIR in Firestore after item delete', e);
+          }
+        })();
+      }
+      
       try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
       return updated;
     });
@@ -704,26 +712,16 @@ const PSIRModule: React.FC = () => {
 
   const generatePSIRDebugReport = () => {
     try {
-      const purchaseOrdersRaw = localStorage.getItem('purchaseOrders');
-      const purchaseDataRaw = localStorage.getItem('purchaseData');
-      const indentDataRaw = localStorage.getItem('indentData');
-      const itemMasterRaw = localStorage.getItem('itemMasterData');
-      const psirDataRaw = localStorage.getItem('psirData');
-
-      const purchaseOrders = purchaseOrdersRaw ? JSON.parse(purchaseOrdersRaw) : null;
-      const purchaseData = purchaseDataRaw ? JSON.parse(purchaseDataRaw) : null;
-      const indentData = indentDataRaw ? JSON.parse(indentDataRaw) : null;
-      const itemMaster = itemMasterRaw ? JSON.parse(itemMasterRaw) : null;
-      const psirData = psirDataRaw ? JSON.parse(psirDataRaw) : null;
-
       const report = {
         generatedAt: new Date().toISOString(),
         purchaseOrdersCount: Array.isArray(purchaseOrders) ? purchaseOrders.length : 0,
         purchaseDataCount: Array.isArray(purchaseData) ? purchaseData.length : 0,
         indentDataCount: Array.isArray(indentData) ? indentData.length : 0,
         itemMasterCount: Array.isArray(itemMaster) ? itemMaster.length : 0,
-        psirDataCount: Array.isArray(psirData) ? psirData.length : 0,
+        psirDataCount: Array.isArray(psirs) ? psirs.length : 0,
+        stockRecordsCount: Array.isArray(stockRecords) ? stockRecords.length : 0,
         processedPOs: Array.from(processedPOs),
+        userUid: userUid || 'not authenticated',
         currentItemInput: itemInput,
         currentNewPSIR: newPSIR,
       };
@@ -739,10 +737,6 @@ const PSIRModule: React.FC = () => {
   // Compute purchase actuals per stock record (PSIR OK - Vendor Issued)
   const computePurchaseActuals = () => {
     try {
-      const psirs = JSON.parse(localStorage.getItem('psirData') || '[]');
-      const stockRecords = JSON.parse(localStorage.getItem('stock-records') || '[]');
-      const vendorIssues = JSON.parse(localStorage.getItem('vendorIssueData') || '[]');
-
       const okTotalsByItemName: Record<string, number> = {};
       if (Array.isArray(psirs)) {
         psirs.forEach((psir: any) => {
@@ -760,30 +754,14 @@ const PSIRModule: React.FC = () => {
         });
       }
 
-      const vendorIssuedByCode: Record<string, number> = {};
-      if (Array.isArray(vendorIssues)) {
-        vendorIssues.forEach((issue: any) => {
-          if (Array.isArray(issue.items)) {
-            issue.items.forEach((it: any) => {
-              const code = String(it.itemCode || '').trim();
-              const qty = Number(it.qty || 0) || 0;
-              if (!code) return;
-              vendorIssuedByCode[code] = (vendorIssuedByCode[code] || 0) + qty;
-            });
-          }
-        });
-      }
-
       const results = Array.isArray(stockRecords)
         ? stockRecords.map((rec: any) => {
             const ok = okTotalsByItemName[rec.itemName] || 0;
-            const vendorIssued = vendorIssuedByCode[rec.itemCode] || 0;
             return {
               itemName: rec.itemName,
               itemCode: rec.itemCode,
               okTotal: ok,
-              vendorIssued: vendorIssued,
-              purchaseActualQtyInStore: ok - vendorIssued,
+              purchaseActualQtyInStore: ok,
             };
           })
         : [];
@@ -796,7 +774,6 @@ const PSIRModule: React.FC = () => {
 
   const manualDispatchPSIRUpdated = () => {
     try {
-      const psirs = JSON.parse(localStorage.getItem('psirData') || '[]');
       bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs } }));
       alert('Dispatched psir.updated with current psirData');
     } catch (err) {
@@ -829,16 +806,12 @@ const PSIRModule: React.FC = () => {
   // Helper: get PO Qty for a PSIR item by matching purchaseData entries
   const getPOQtyFor = (poNo: string | undefined, indentNo: string | undefined, itemCode: string | undefined): number => {
     try {
-      // Read both purchaseData and purchaseOrders to be resilient to where the data is stored
-      const rawA = localStorage.getItem('purchaseData');
-      const rawB = localStorage.getItem('purchaseOrders');
-      const arrA = Array.isArray(rawA ? JSON.parse(rawA) : []) ? JSON.parse(rawA || '[]') : [];
-      const arrB = Array.isArray(rawB ? JSON.parse(rawB) : []) ? JSON.parse(rawB || '[]') : [];
+      // Use state-based purchaseData and purchaseOrders instead of localStorage
+      const arrA = Array.isArray(purchaseData) ? purchaseData : [];
+      const arrB = Array.isArray(purchaseOrders) ? purchaseOrders : [];
       // Merge purchaseData (arrA) and purchaseOrders (arrB) deterministically
-      // Prefer entries from purchaseData when duplicate keys exist.
       const mergeKey = (e: any) => `${String(e.poNo||'').trim().toUpperCase()}|${String(e.indentNo||'').trim().toUpperCase()}|${String(e.itemCode||e.Code||e.Item||'').trim().toUpperCase()}`;
       const mergedMap = new Map<string, any>();
-      // start with arrB, then overwrite with arrA so arrA has priority
       if (Array.isArray(arrB)) arrB.forEach((e: any) => mergedMap.set(mergeKey(e), e));
       if (Array.isArray(arrA)) arrA.forEach((e: any) => mergedMap.set(mergeKey(e), e));
       const arr = Array.from(mergedMap.values());
@@ -850,149 +823,17 @@ const PSIRModule: React.FC = () => {
 
       const extractQty = (e: any) => Number(e.purchaseQty ?? e.poQty ?? e.qty ?? e.originalIndentQty ?? 0) || 0;
 
-      // Prefer PurchaseModule rule: when indentStatus is Open => PO Qty = live/current stock, else 0
-      const preferQuantityFromEntry = (e: any) => {
-        try {
-          // If the indent is closed, PO Qty should be 0 per Purchase rules
-          if (String(e.indentStatus || '').trim() === 'Closed') return 0;
-
-          // If indent is Open, prefer the 'live stock' display used by PurchaseModule
-          if (String(e.indentStatus || '').trim() === 'Open') {
-            try {
-              // Recompute live display similar to PurchaseModule's getLiveStockInfo
-              const openIndentRaw = localStorage.getItem('openIndentItems');
-              const closedIndentRaw = localStorage.getItem('closedIndentItems');
-              const openIndentItems = openIndentRaw ? JSON.parse(openIndentRaw) : [];
-              const closedIndentItems = closedIndentRaw ? JSON.parse(closedIndentRaw) : [];
-              const allIndentItems = [...openIndentItems, ...closedIndentItems];
-
-              const normIndent = String(e.indentNo || '').trim();
-              const normCode = String(e.itemCode || e.Code || e.Item || '').trim();
-
-              for (const indentItem of allIndentItems) {
-                if (!indentItem) continue;
-                const itemIndentNo = String(indentItem.indentNo || '').trim();
-                const itemCodeA = String(indentItem.itemCode || '').trim();
-                const itemCodeB = String(indentItem.Code || '').trim();
-                if (itemIndentNo === normIndent && (itemCodeA === normCode || itemCodeB === normCode)) {
-                  try {
-                    // Prefer explicit available value from indent item when present
-                    const availFromIndent = [
-                      indentItem.availableForThisIndent,
-                      indentItem.allocatedAvailable,
-                      indentItem.qty1,
-                      indentItem.available
-                    ].find(v => v !== undefined && v !== null);
-                    if (availFromIndent !== undefined && availFromIndent !== null) {
-                      const av = Number(availFromIndent);
-                      if (!isNaN(av)) return av;
-                    }
-
-                    const indentDataRaw = localStorage.getItem('indentData');
-                    const indentData = indentDataRaw ? JSON.parse(indentDataRaw) : [];
-
-                    let found = false;
-                    let targetIndentIdx = -1;
-                    let targetItemIdx = -1;
-                    for (let i = 0; i < indentData.length && !found; i++) {
-                      const ind = indentData[i];
-                      if (!ind || !Array.isArray(ind.items)) continue;
-                      if (String(ind.indentNo || '').trim() !== itemIndentNo) continue;
-                      for (let j = 0; j < ind.items.length; j++) {
-                        const it = ind.items[j];
-                        if (!it) continue;
-                        const codeA2 = String(it.itemCode || '').trim();
-                        const codeB2 = String(it.Code || it.Item || '').trim();
-                        if (codeA2 !== normCode && codeB2 !== normCode) continue;
-                        found = true; targetIndentIdx = i; targetItemIdx = j; break;
-                      }
-                    }
-
-                    if (found && targetIndentIdx >= 0 && targetItemIdx >= 0) {
-                      let cumulativeQty = 0;
-                      for (let i = 0; i <= targetIndentIdx; i++) {
-                        try {
-                          const ind = indentData[i];
-                          if (!ind || !Array.isArray(ind.items)) continue;
-                          for (let j = 0; j < (i === targetIndentIdx ? targetItemIdx + 1 : ind.items.length); j++) {
-                            const it = ind.items[j];
-                            if (!it) continue;
-                            cumulativeQty += Number(it.qty || 0) || 0;
-                          }
-                        } catch (err) {}
-                      }
-
-                      // If cumulativeQty is zero, fallback to potential original quantity fields
-                      if (cumulativeQty === 0) {
-                        const indentQtyFallback = Number(e.originalIndentQty ?? e.quantity ?? 0) || 0;
-                        if (indentQtyFallback > 0) cumulativeQty = indentQtyFallback;
-                      }
-
-                      // Compare with closing stock to derive display
-                      const stockRaw = localStorage.getItem('stock-records');
-                      const stocks = stockRaw ? JSON.parse(stockRaw) : [];
-                      const stockRec = stocks.find((s: any) => String(s.itemCode || '').trim() === String(e.itemCode || e.Code || e.Item || '').trim());
-                      const closingStock = stockRec && !isNaN(Number(stockRec.closingStock)) ? Number(stockRec.closingStock) : 0;
-
-                      let display: number;
-                      if (cumulativeQty > 0) {
-                        if (cumulativeQty > closingStock) display = cumulativeQty - closingStock;
-                        else display = cumulativeQty;
-                      } else {
-                        display = closingStock;
-                      }
-
-                      return display;
-                    }
-                  } catch (err) {
-                    // fall through to stored/current fallbacks
-                  }
-                }
-              }
-            } catch (err) {
-              // ignore
-            }
-          }
-
-          // Prefer the stored PO/purchase quantity from the Purchase module first
-          const stored = extractQty(e);
-          if (stored && stored > 0) return stored;
-
-          // If stored qty is not available, try currentStock
-          const currentStock = Number(e.currentStock ?? e.stock ?? e.current ?? 0) || 0;
-          if (currentStock > 0) return currentStock;
-
-          // Fallback: compute purchase actuals (OK totals - vendor issued)
-          try {
-            const actuals = computePurchaseActuals();
-            const codes = [e.itemCode, e.Code, e.CodeNo, e.Item].map((c: any) => norm(c));
-            const match = actuals.find((a: any) => codes.includes(norm(a.itemCode)) || norm(a.itemName) === norm(e.itemName));
-            if (match) {
-              const val = Number(match.purchaseActualQtyInStore || 0) || 0;
-              if (val > 0) return val;
-            }
-          } catch (err) {
-            // ignore compute errors
-          }
-
-          return 0;
-        } catch (err) {
-          return extractQty(e);
-        }
-      };
-
-      // Helper to normalize candidate item codes from a purchase row
+      // Simplified version using state-based data
       const candidateCodes = (e: any) => [e.itemCode, e.Code, e.CodeNo, e.Item].map((c: any) => norm(c));
 
-      // 1) Exact match: poNo + itemCode (consider multiple code fields)
+      // 1) Exact match: poNo + itemCode
       const byPoAndCode = arr.find((e: any) => {
-        // only attempt PO+Code match when a target PO is provided
         if (!targetPo) return false;
         if (norm(e.poNo) !== targetPo) return false;
         const codes = candidateCodes(e);
         return codes.includes(targetCode);
       });
-      if (byPoAndCode) return preferQuantityFromEntry(byPoAndCode);
+      if (byPoAndCode) return extractQty(byPoAndCode);
 
       // 2) Fallback: indentNo + itemCode
       const byIndentAndCode = arr.find((e: any) => {
@@ -1000,17 +841,14 @@ const PSIRModule: React.FC = () => {
         const codes = candidateCodes(e);
         return codes.includes(targetCode);
       });
-      if (byIndentAndCode) return preferQuantityFromEntry(byIndentAndCode);
+      if (byIndentAndCode) return extractQty(byIndentAndCode);
 
-      // 3) Fallback: match by PO only (take first with matching PO)
-      if (targetPo) {
-        const byPo = arr.find((e: any) => norm(e.poNo) === targetPo);
-        if (byPo) return preferQuantityFromEntry(byPo);
-      }
-
-      // 4) Last resort: any entry with matching itemCode
-      const byCode = arr.find((e: any) => candidateCodes(e).includes(targetCode));
-      if (byCode) return preferQuantityFromEntry(byCode);
+      // 3) Last resort: just itemCode lookup
+      const byCode = arr.find((e: any) => {
+        const codes = candidateCodes(e);
+        return codes.includes(targetCode);
+      });
+      if (byCode) return extractQty(byCode);
 
       return 0;
     } catch (err) {
@@ -1022,10 +860,9 @@ const PSIRModule: React.FC = () => {
   const getPOQtyMatchDetails = (poNo: string | undefined, indentNo: string | undefined, itemCode: string | undefined) => {
     const details: any = { poNo, indentNo, itemCode, tried: [], matched: false, matchedSource: null, matchedEntry: null, qty: 0 };
     try {
-      const rawA = localStorage.getItem('purchaseData');
-      const rawB = localStorage.getItem('purchaseOrders');
-      const arrA = rawA ? JSON.parse(rawA) : [];
-      const arrB = rawB ? JSON.parse(rawB) : [];
+      // Use in-memory state arrays sourced from Firestore
+      const arrA = Array.isArray(purchaseData) ? purchaseData : [];
+      const arrB = Array.isArray(purchaseOrders) ? purchaseOrders : [];
 
       // Deterministic merge: prefer purchaseData (arrA) over purchaseOrders (arrB)
       const mergeKey = (e: any) => `${String(e.poNo||'').trim().toUpperCase()}|${String(e.indentNo||'').trim().toUpperCase()}|${String(e.itemCode||e.Code||e.Item||'').trim().toUpperCase()}`;
@@ -1042,7 +879,6 @@ const PSIRModule: React.FC = () => {
       const extractQty = (e: any) => Number(e.purchaseQty ?? e.poQty ?? e.qty ?? e.originalIndentQty ?? 0) || 0;
       const candidateCodes = (e: any) => [e.itemCode, e.Code, e.CodeNo, e.Item].map((c: any) => norm(c));
 
-      // Preference rule: Open -> use currentStock if present, else stored qty; Closed -> 0
       const preferQuantityFromEntry = (e: any) => {
         try {
           const stored = extractQty(e);
@@ -1067,7 +903,6 @@ const PSIRModule: React.FC = () => {
       // 1) Exact match: poNo + itemCode
       details.tried.push({ step: 'po+code', targetPo, targetCode });
       const byPoAndCode = arr.find((e: any) => {
-        // only attempt PO+Code match when a target PO is provided
         if (!targetPo) return false;
         if (norm(e.poNo) !== targetPo) return false;
         const codes = candidateCodes(e);
@@ -1102,7 +937,6 @@ const PSIRModule: React.FC = () => {
       const byCode = arr.find((e: any) => candidateCodes(e).includes(targetCode));
       if (byCode) { details.matched = true; details.matchedSource = 'purchaseData|purchaseOrders'; details.matchedEntry = byCode; details.qty = preferQuantityFromEntry(byCode); return details; }
 
-      // nothing matched
       details.matched = false; details.matchedSource = null; details.matchedEntry = null; details.qty = 0;
       return details;
     } catch (err) {
@@ -1143,9 +977,7 @@ const PSIRModule: React.FC = () => {
 
   const dumpPurchaseOrders = () => {
     try {
-      const raw = localStorage.getItem('purchaseOrders');
-      const parsed = raw ? JSON.parse(raw) : null;
-      console.log('[PSIR DEBUG] purchaseOrders:', parsed);
+      console.log('[PSIR DEBUG] purchaseOrders:', purchaseOrders);
       alert('purchaseOrders printed to console');
     } catch (err) {
       alert('Error reading purchaseOrders: ' + String(err));
@@ -1199,7 +1031,24 @@ const PSIRModule: React.FC = () => {
 
       if (restoredCount > 0) {
         setPsirs(repaired);
-        localStorage.setItem('psirData', JSON.stringify(repaired));
+        try {
+          if (userUid) {
+            // persist repaired items back to Firestore for each PSIR that has an id
+            (async () => {
+              try {
+                await Promise.all(repaired.map(async (psir: any) => {
+                  if (psir && psir.id) {
+                    await updatePsir(psir.id, { items: psir.items });
+                  }
+                }));
+              } catch (err) {
+                console.error('[PSIRModule] Error persisting repaired PSIRs to Firestore:', err);
+              }
+            })();
+          }
+        } catch (err) {
+          console.error('[PSIRModule] Error scheduling PSIR persistence:', err);
+        }
         try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: repaired } })); } catch (err) {}
         console.info(`[PSIRModule] Repair restored qtyReceived for ${restoredCount} items from originalIndentQty.`);
       } else {
@@ -1255,12 +1104,12 @@ const PSIRModule: React.FC = () => {
         <div style={{ marginBottom: 16, padding: 12, background: '#fff3e0', border: '1px solid #ffb74d', borderRadius: 6 }}>
           <div style={{ marginBottom: 8, fontWeight: 700 }}>PSIR Debug Output</div>
           <div style={{ marginBottom: 8, display: 'flex', gap: 8 }}>
-            <button onClick={() => setPsirDebugOutput(formatJSON({ psirData: JSON.parse(localStorage.getItem('psirData') || '[]') }))} style={{ padding: '6px 8px' }}>Show psirData</button>
-            <button onClick={() => setPsirDebugExtra(formatJSON(JSON.parse(localStorage.getItem('stock-records') || '[]')))} style={{ padding: '6px 8px' }}>Show stock-records</button>
+            <button onClick={() => setPsirDebugOutput(formatJSON({ psirData: psirs }))} style={{ padding: '6px 8px' }}>Show psirData</button>
+            <button onClick={() => { getStockRecords(userUid || '').then(recs => setPsirDebugExtra(formatJSON(recs))); }} style={{ padding: '6px 8px' }}>Show stock-records</button>
             <button onClick={() => setPsirDebugExtra(formatJSON(computePurchaseActuals()))} style={{ padding: '6px 8px' }}>Show computed purchaseActuals</button>
             <button onClick={manualDispatchPSIRUpdated} style={{ padding: '6px 8px' }}>Dispatch psir.updated</button>
             <button
-              onClick={() => {
+              onClick={async () => {
                 // Debug PO Qty for current newPSIR items
                 try {
                   const details = (newPSIR.items || []).map(it => getPOQtyMatchDetails(newPSIR.poNo, newPSIR.indentNo, it.itemCode));
@@ -1274,30 +1123,28 @@ const PSIRModule: React.FC = () => {
               Debug PO Qty (current items)
             </button>
             <button
-              onClick={() => {
+              onClick={async () => {
                 // Manual action: Sync empty PSIR.qtyReceived from Purchase PO Qty (non-destructive)
                 try {
-                  const raw = localStorage.getItem('psirData');
-                  if (!raw) { alert('No PSIR data found'); return; }
-                  const psirArr = JSON.parse(raw) as any[];
+                  if (psirs.length === 0) { alert('No PSIR data found'); return; }
                   let changed = false;
                   let count = 0;
-                  const updated = psirArr.map(psir => ({
-                    ...psir,
-                    items: (psir.items || []).map((item: any) => {
+                  for (const psir of psirs) {
+                    const newItems = (psir.items || []).map((item: any) => {
                       const existing = Number(item.qtyReceived || 0) || 0;
                       const poQty = getPOQtyFor(psir.poNo, psir.indentNo, item.itemCode) || 0;
                       if (existing === 0 && poQty > 0) {
                         changed = true; count++; return { ...item, qtyReceived: poQty };
                       }
                       return item;
-                    })
-                  }));
+                    });
+                    if (changed && psir.id && userUid) {
+                      await updatePsir(psir.id, { items: newItems });
+                    }
+                  }
                   if (changed) {
-                    localStorage.setItem('psirData', JSON.stringify(updated));
-                    try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
+                    try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs } })); } catch (err) {}
                     alert(`Sync applied: filled ${count} items' PO into PSIR.qtyReceived`);
-                    setPsirs(updated);
                   } else {
                     alert('No empty PSIR.qtyReceived items found to sync');
                   }
@@ -1311,27 +1158,25 @@ const PSIRModule: React.FC = () => {
             </button>
 
             <button
-              onClick={() => {
+              onClick={async () => {
                 // Manual action: Sync PO Qty snapshot into PSIR items from Purchase (non-destructive)
                 try {
-                  const raw = localStorage.getItem('psirData');
-                  if (!raw) { alert('No PSIR data found'); return; }
-                  const arr = JSON.parse(raw) as any[];
+                  if (psirs.length === 0) { alert('No PSIR data found'); return; }
                   let changed = 0;
-                  const updated = arr.map(psir => ({
-                    ...psir,
-                    items: (psir.items || []).map((it: any) => {
+                  for (const psir of psirs) {
+                    const newItems = (psir.items || []).map((it: any) => {
                       try {
                         const newPo = getPOQtyFor(psir.poNo, psir.indentNo, it.itemCode) || 0;
                         if ((Number(it.poQty || 0) || 0) !== newPo) { changed++; return { ...it, poQty: newPo }; }
                         return it;
                       } catch (err) { return it; }
-                    })
-                  }));
+                    });
+                    if (changed > 0 && psir.id && userUid) {
+                      await updatePsir(psir.id, { items: newItems });
+                    }
+                  }
                   if (changed > 0) {
-                    localStorage.setItem('psirData', JSON.stringify(updated));
-                    try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: updated } })); } catch (err) {}
-                    setPsirs(updated);
+                    try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs } })); } catch (err) {}
                     alert(`Synced PO Qty into PSIR for ${changed} items`);
                   } else {
                     alert('All PSIR poQty values are already up-to-date');
@@ -1348,17 +1193,14 @@ const PSIRModule: React.FC = () => {
                 // Manual action: Shift PSIR.qtyReceived into Purchase records (destructive) — ask for confirmation
                 if (!confirm('This will move PSIR.qtyReceived into purchase records where purchaseQty is empty and clear PSIR.qtyReceived. Proceed?')) return;
                 try {
-                  const rawA = localStorage.getItem('purchaseData');
-                  const rawB = localStorage.getItem('purchaseOrders');
-                  const arrA = rawA ? JSON.parse(rawA) : [];
-                  const arrB = rawB ? JSON.parse(rawB) : [];
-                  const psirRaw = localStorage.getItem('psirData');
-                  if (!psirRaw) { alert('No PSIR data found'); return; }
-                  const psirArr = JSON.parse(psirRaw) as any[];
+                  const arrA = Array.isArray(purchaseData) ? JSON.parse(JSON.stringify(purchaseData)) : [];
+                  const arrB = Array.isArray(purchaseOrders) ? JSON.parse(JSON.stringify(purchaseOrders)) : [];
+                  const psirArr = Array.isArray(psirs) ? JSON.parse(JSON.stringify(psirs)) : [];
+                  if (!psirArr || psirArr.length === 0) { alert('No PSIR data found'); return; }
                   let shiftedCount = 0;
                   // perform shift similar to previous logic but as manual operation
                   const norm = (v: any) => (v === undefined || v === null) ? '' : String(v).trim().toUpperCase();
-                  const newPsirs = psirArr.map(psir => ({
+                  const newPsirs = psirArr.map((psir: any) => ({
                     ...psir,
                     items: (psir.items || []).map((item: any) => {
                       try {
@@ -1393,12 +1235,34 @@ const PSIRModule: React.FC = () => {
                     })
                   }));
                   if (shiftedCount > 0) {
-                    if (Array.isArray(arrA)) { localStorage.setItem('purchaseData', JSON.stringify(arrA)); try { bus.dispatchEvent(new CustomEvent('purchaseData.updated', { detail: { purchaseData: arrA } })); } catch (err) {} }
-                    if (Array.isArray(arrB)) { localStorage.setItem('purchaseOrders', JSON.stringify(arrB)); try { bus.dispatchEvent(new CustomEvent('purchaseOrders.updated', { detail: arrB })); } catch (err) {} }
-                    localStorage.setItem('psirData', JSON.stringify(newPsirs));
-                    try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: newPsirs } })); } catch (err) {}
-                    setPsirs(newPsirs);
-                    alert(`Shift applied: moved ${shiftedCount} qtyReceived values into purchase records and cleared them in PSIR`);
+                    // Persist changes to Firestore (purchaseData, purchaseOrders and PSIRs)
+                    if (userUid) {
+                      (async () => {
+                        try {
+                          if (Array.isArray(arrA)) {
+                            await Promise.all(arrA.map(async (e: any) => { if (e && e.id) await updatePurchaseData(userUid, e.id, e); }));
+                            try { bus.dispatchEvent(new CustomEvent('purchaseData.updated', { detail: { purchaseData: arrA } })); } catch (err) {}
+                          }
+                          if (Array.isArray(arrB)) {
+                            await Promise.all(arrB.map(async (e: any) => { if (e && e.id) await updatePurchaseOrder(userUid, e.id, e); }));
+                            try { bus.dispatchEvent(new CustomEvent('purchaseOrders.updated', { detail: arrB })); } catch (err) {}
+                          }
+                          // Update PSIRs
+                          await Promise.all(newPsirs.map(async (p: any) => { if (p && p.id) await updatePsir(p.id, { items: p.items }); }));
+                          try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: newPsirs } })); } catch (err) {}
+                          setPsirs(newPsirs);
+                          alert(`Shift applied: moved ${shiftedCount} qtyReceived values into purchase records and cleared them in PSIR`);
+                        } catch (err) {
+                          console.error('[PSIRModule] Error persisting shifted data to Firestore:', err);
+                          alert('Shift completed locally but failed to persist some changes: ' + String(err));
+                        }
+                      })();
+                    } else {
+                      // fallback: update local state only
+                      setPsirs(newPsirs);
+                      try { bus.dispatchEvent(new CustomEvent('psir.updated', { detail: { psirs: newPsirs } })); } catch (err) {}
+                      alert(`Shift applied: moved ${shiftedCount} qtyReceived values into purchase records and cleared them in PSIR`);
+                    }
                   } else {
                     alert('No eligible qtyReceived values found to shift');
                   }

@@ -1,4 +1,4 @@
-import { collection, query, where, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDocs, serverTimestamp } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, addDoc, updateDoc, deleteDoc, doc, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { logger } from './logger';
 
@@ -251,5 +251,43 @@ export const addStockRecord = async (uid: string, data: any) => {
   } catch (error) {
     logger.error('[FirestoreServices] Error adding stockRecord:', error);
     throw error;
+  }
+};
+
+export const updateStockRecord = async (uid: string, docId: string, data: any) => {
+  try {
+    const docRef = doc(db, 'users', uid, 'stockRecords', docId);
+    await updateDoc(docRef, { ...data, updatedAt: serverTimestamp() });
+  } catch (error) {
+    logger.error('[FirestoreServices] Error updating stockRecord:', error);
+    throw error;
+  }
+};
+
+export const deleteStockRecord = async (uid: string, docId: string) => {
+  try {
+    const docRef = doc(db, 'users', uid, 'stockRecords', docId);
+    await deleteDoc(docRef);
+  } catch (error) {
+    logger.error('[FirestoreServices] Error deleting stockRecord:', error);
+    throw error;
+  }
+};
+
+export const subscribeStockRecords = (uid: string, cb: (docs: any[]) => void) => {
+  try {
+    const col = collection(db, 'users', uid, 'stockRecords');
+    const q = query(col, orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(q, snap => {
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      cb(docs);
+    }, (error) => {
+      logger.error('[FirestoreServices] Error subscribing to stockRecords:', error);
+      cb([]);
+    });
+    return unsub;
+  } catch (error) {
+    logger.error('[FirestoreServices] subscribeStockRecords failed:', error);
+    return () => {};
   }
 };

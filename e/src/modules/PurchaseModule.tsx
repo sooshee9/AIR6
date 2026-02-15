@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from "react";
 import bus from '../utils/eventBus';
 import { subscribeFirestoreDocs, replaceFirestoreCollection } from '../utils/firestoreSync';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, db } from '../firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 
 interface PurchaseEntry {
   orderPlaceDate: string;
@@ -45,6 +48,39 @@ const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
   const [indentData, setIndentData] = useState<any[]>([]);
   const [_itemMasterData, setItemMasterData] = useState<any[]>([]);
   const [_psirData, setPsirData] = useState<any[]>([]);
+
+  // Migrate existing localStorage `purchaseData` into Firestore on sign-in
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      const uid = u ? u.uid : null;
+      if (uid) {
+        (async () => {
+          try {
+            const raw = localStorage.getItem('purchaseData');
+            if (raw) {
+              const arr = JSON.parse(raw || '[]');
+              if (Array.isArray(arr) && arr.length > 0) {
+                for (const it of arr) {
+                  try {
+                    const payload = { ...it } as any;
+                    if (typeof payload.id !== 'undefined') delete payload.id;
+                    const col = collection(db, 'userData', uid, 'purchaseData');
+                    await addDoc(col, { ...payload, createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+                  } catch (err) {
+                    console.warn('[PurchaseModule] migration addDoc failed for item', it, err);
+                  }
+                }
+                try { localStorage.removeItem('purchaseData'); } catch {}
+              }
+            }
+          } catch (err) {
+            console.error('[PurchaseModule] Migration failed:', err);
+          }
+        })();
+      }
+    });
+    return () => { try { unsub(); } catch {} };
+  }, []);
 
   const [newEntry, setNewEntry] = useState<PurchaseEntry>({
     orderPlaceDate: "",
