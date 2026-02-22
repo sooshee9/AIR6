@@ -20,6 +20,9 @@ import { hardResetAllData, verifyDataCleared, forceCleanupAllData } from './util
 
 import './App.css';
 
+// ─── Logo (embedded, no external dependency) ─────────────────────────────────
+const LOGO_DATA_URL = 'data:image/png;base64,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';
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 type ModuleKey =
   | 'purchase' | 'indent' | 'vendorDept' | 'vendorIssue'
@@ -36,79 +39,6 @@ const NAV_ITEMS: { key: ModuleKey; label: string; icon: string }[] = [
   { key: 'stock',        label: 'Stock',          icon: '📊' },
   { key: 'itemMaster',   label: 'Item Master',    icon: '🗂️' },
 ];
-
-// ─── Shared Module Footer Pills ───────────────────────────────────────────────
-// Moved here from StockModule so every module benefits from the same footer
-function ModuleFooter({
-  activeModule,
-  onNavigate,
-}: {
-  activeModule: ModuleKey;
-  onNavigate: (key: ModuleKey) => void;
-}) {
-  return (
-    <div style={{
-      marginTop: 40,
-      borderTop: '2px solid rgba(21,101,192,0.25)',
-      paddingTop: 20,
-      background: 'linear-gradient(90deg, #071525 0%, #0f2540 50%, #071525 100%)',
-      borderRadius: '0 0 14px 14px',
-    }}>
-      {/* Calligraphic label */}
-      <div style={{
-        fontFamily: '"Palatino Linotype", Palatino, Georgia, serif',
-        textAlign: 'center',
-        fontSize: 11,
-        fontStyle: 'italic',
-        color: 'rgba(212,175,55,0.55)',
-        letterSpacing: '0.22em',
-        textTransform: 'uppercase',
-        marginBottom: 14,
-      }}>
-        ✦ AIRTECH ERP · Inventory Modules ✦
-      </div>
-
-      {/* Module pills — clickable, highlight active */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, padding: '0 16px' }}>
-        {NAV_ITEMS.map(({ key, label, icon }) => {
-          const isActive = activeModule === key;
-          return (
-            <button
-              key={key}
-              onClick={() => onNavigate(key)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '6px 14px', borderRadius: 20,
-                background: isActive ? 'rgba(21,101,192,0.28)' : 'rgba(255,255,255,0.05)',
-                border: isActive ? '1px solid rgba(66,165,245,0.5)' : '1px solid rgba(255,255,255,0.1)',
-                fontSize: 12,
-                color: isActive ? '#42a5f5' : 'rgba(200,220,255,0.55)',
-                fontWeight: isActive ? 700 : 500,
-                cursor: 'pointer',
-                fontFamily: 'Inter, system-ui, sans-serif',
-                transition: 'all 0.15s',
-                boxShadow: isActive ? '0 0 10px rgba(21,101,192,0.25)' : 'none',
-              }}
-            >
-              <span style={{ fontSize: 14 }}>{icon}</span>
-              <span>{label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Copyright */}
-      <div style={{
-        textAlign: 'center', marginTop: 16, paddingBottom: 16,
-        fontSize: 11, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.1em',
-        fontFamily: '"Palatino Linotype", Palatino, Georgia, serif',
-        fontStyle: 'italic',
-      }}>
-        © AIRTECH ERP · Inventory Management System
-      </div>
-    </div>
-  );
-}
 
 // ─── Hard Reset ───────────────────────────────────────────────────────────────
 async function handleHardReset(uid: string) {
@@ -201,22 +131,15 @@ function App() {
         }
 
         .erp-brand {
-          display: flex; align-items: center; gap: 12px; text-decoration: none;
+          display: flex; align-items: center; gap: 12px;
           flex-shrink: 0;
         }
-        .erp-brand-icon {
-          width: 38px; height: 38px; border-radius: 10px;
-          background: linear-gradient(160deg, #1565C0 0%, #0d47a1 100%);
-          display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 1px rgba(66,165,245,0.3);
+        /* Logo image replaces the old letter/anchor icon */
+        .erp-brand-logo {
+          width: 40px; height: 40px; border-radius: 10px;
+          object-fit: cover;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 1px rgba(66,165,245,0.25);
           flex-shrink: 0;
-          font-family: 'Cinzel', Georgia, serif;
-          font-weight: 900;
-          font-size: 18px;
-          color: #fff;
-          letter-spacing: -0.02em;
-          text-shadow: 0 1px 4px rgba(0,0,0,0.4);
-          user-select: none;
         }
 
         .erp-brand-text { display: flex; flex-direction: column; gap: 1px; }
@@ -303,7 +226,6 @@ function App() {
           padding: 0 20px 24px;
         }
 
-        /* The white card wrapper */
         .erp-content {
           background: #fff;
           border-radius: 14px;
@@ -312,13 +234,9 @@ function App() {
           min-height: 500px;
           overflow: visible;
         }
+        .erp-content > * { min-height: unset !important; }
 
-        /* Stop modules from inflating height with min-height:100vh */
-        .erp-content > * {
-          min-height: unset !important;
-        }
-
-        /* ── Footer Nav ── */
+        /* ── Footer — SINGLE nav row only, no duplicate pills ── */
         .erp-footer {
           flex-shrink: 0;
           position: relative;
@@ -333,27 +251,26 @@ function App() {
           background: linear-gradient(90deg, transparent, rgba(21,101,192,0.5), transparent);
         }
 
-        /* Nav icon row */
+        /* Single icon+label nav — no second pill row */
         .erp-nav {
           display: flex; justify-content: center; align-items: center;
-          gap: 4px; padding: 8px 16px 4px;
+          gap: 4px; padding: 8px 16px;
           overflow-x: auto; flex-wrap: nowrap;
           scrollbar-width: none;
-          border-bottom: 1px solid rgba(21,101,192,0.18);
         }
         .erp-nav::-webkit-scrollbar { display: none; }
 
         .erp-nav-btn {
           display: flex; flex-direction: column; align-items: center; gap: 4px;
-          padding: 7px 14px; border-radius: 10px;
+          padding: 8px 14px; border-radius: 10px;
           border: 1px solid transparent;
           background: transparent;
           color: rgba(255,255,255,0.6);
           font-family: 'Inter', sans-serif;
-          font-size: 12px; font-weight: 500;
+          font-size: 11px; font-weight: 500;
           cursor: pointer; white-space: nowrap;
           transition: all 0.15s; flex-shrink: 0;
-          min-width: 68px;
+          min-width: 64px;
         }
         .erp-nav-btn .nav-icon { font-size: 20px; line-height: 1; }
         .erp-nav-btn .nav-label { line-height: 1; letter-spacing: 0.01em; }
@@ -371,45 +288,6 @@ function App() {
         }
         .erp-nav-btn.active .nav-icon { filter: drop-shadow(0 0 4px rgba(66,165,245,0.6)); }
 
-        /* Module pill row inside footer */
-        .erp-module-pills {
-          display: flex; justify-content: center; align-items: center;
-          gap: 6px; padding: 8px 16px;
-          overflow-x: auto; flex-wrap: wrap;
-          border-top: 1px solid rgba(21,101,192,0.12);
-        }
-
-        .erp-pill-btn {
-          display: flex; align-items: center; gap: 5px;
-          padding: 5px 12px; border-radius: 20px;
-          border: 1px solid rgba(255,255,255,0.1);
-          background: rgba(255,255,255,0.05);
-          color: rgba(200,220,255,0.55);
-          font-family: 'Inter', sans-serif;
-          font-size: 11px; font-weight: 500;
-          cursor: pointer; white-space: nowrap;
-          transition: all 0.15s;
-        }
-        .erp-pill-btn:hover {
-          background: rgba(255,255,255,0.09);
-          color: rgba(200,220,255,0.85);
-        }
-        .erp-pill-btn.active {
-          background: rgba(21,101,192,0.28);
-          border-color: rgba(66,165,245,0.5);
-          color: #42a5f5;
-          font-weight: 700;
-          box-shadow: 0 0 8px rgba(21,101,192,0.2);
-        }
-
-        /* Anchor icon next to "Stock Records" heading — shared style */
-        .erp-anchor-icon {
-          font-size: 20px;
-          color: #3B5BDB;
-          line-height: 1;
-          flex-shrink: 0;
-        }
-
         @keyframes headerShimmer {
           from { background-position: 200% 0; } to { background-position: -200% 0; }
         }
@@ -420,9 +298,13 @@ function App() {
         {/* ── Header ── */}
         <header className="erp-header">
 
-          {/* Brand — ⚓ anchor replaces the plain "A" letter */}
+          {/* Brand: app logo image (no anchor, no plain "A") */}
           <div className="erp-brand">
-            <div className="erp-brand-icon" title="Airtech ERP">⚓</div>
+            <img
+              src={LOGO_DATA_URL}
+              alt="Airtech ERP"
+              className="erp-brand-logo"
+            />
             <div className="erp-brand-text">
               <div className="erp-brand-name">AIRTECH&nbsp;<span className="erp-suffix">ERP</span></div>
               <div className="erp-brand-sub">Inventory Management</div>
@@ -460,16 +342,11 @@ function App() {
                 {renderModule()}
               </ErrorBoundary>
             </div>
-
-            {/* ── Shared Module Footer Pills (below the content card) ── */}
-            <ModuleFooter activeModule={activeModule} onNavigate={setActiveModule} />
           </main>
         </div>
 
-        {/* ── Footer Nav (icon + label buttons) ── */}
+        {/* ── Footer: SINGLE nav row (icon + label) — no duplicate pill row ── */}
         <footer className="erp-footer">
-
-          {/* Top row: icon nav buttons */}
           <nav className="erp-nav">
             {NAV_ITEMS.map(({ key, label, icon }) => (
               <button
@@ -482,21 +359,6 @@ function App() {
               </button>
             ))}
           </nav>
-
-          {/* Bottom row: compact pill shortcuts */}
-          <div className="erp-module-pills">
-            {NAV_ITEMS.map(({ key, label, icon }) => (
-              <button
-                key={key}
-                className={`erp-pill-btn${activeModule === key ? ' active' : ''}`}
-                onClick={() => setActiveModule(key)}
-              >
-                <span>{icon}</span>
-                <span>{label}</span>
-              </button>
-            ))}
-          </div>
-
         </footer>
 
       </div>
