@@ -48,7 +48,7 @@ const EMPTY_FORM: RecordForm = {
   rejectQty: 0, grnNo: '', remarks: '',
 };
 
-// ─── Design System (consistent with IndentModule / PSIRModule) ────────────────
+// ─── Design System ────────────────────────────────────────────────────────────
 const S = {
   bg: '#F7F8FC', surface: '#FFFFFF', border: '#E4E8F0', borderStrong: '#CBD2E0',
   accent: '#3B5BDB', accentLight: '#EEF2FF',
@@ -336,31 +336,133 @@ const VSIRModule: React.FC = () => {
     }
   }, [form.itemCode]);
 
-  // ─── Import from purchase data ────────────────────────────────────────────
+  // ─── Import from PSIR + purchase data ────────────────────────────────────
+  // FIX: Now imports from psirData first, falls back to purchase orders/data.
+  // Also removed the early-exit guard that blocked import when records > 0;
+  // instead we skip only already-existing PO+itemCode combos.
   const runImport = useCallback(async () => {
     if (!userUid) { showToast('User not authenticated', 'error'); return; }
-    if (records.length > 0) { showToast('Records already exist — clear them first to re-import', 'info'); return; }
-    const source = purchaseOrders.length > 0 ? purchaseOrders : purchaseData;
-    if (!source.length) { showToast('No purchase data found to import', 'error'); return; }
-
-    const getPoNo = (o: any) => { for (const k of ['poNo', 'materialPurchasePoNo', 'po_no', 'poNumber']) { if (o[k]) return o[k]; } return undefined; };
-    const getItems = (o: any) => { if (Array.isArray(o.items) && o.items.length) return o.items; if (Array.isArray(o.materials) && o.materials.length) return o.materials; return []; };
 
     let count = 0;
-    for (const order of source) {
-      const poNo = getPoNo(order); if (!poNo) continue;
-      const items = getItems(order); if (!items.length) continue;
-      const vd = vendorDeptOrders.find((v: any) => (v.materialPurchasePoNo || '').trim() === String(poNo).trim());
-      for (const item of items) {
-        const itemCode = item.itemCode || '';
-        const key = `${String(poNo).trim().toLowerCase()}|${String(itemCode).trim().toLowerCase()}`;
-        if (existingCombosRef.current.has(key)) continue;
-        const rec: VSRIRecord = { id: Math.random().toString(36).slice(2), receivedDate: '', indentNo: '', poNo, oaNo: vd?.oaNo || '', purchaseBatchNo: vd?.batchNo || '', vendorBatchNo: '', dcNo: '', invoiceDcNo: '', vendorName: '', itemName: item.itemName || item.model || '', itemCode, qtyReceived: item.qty || 0, okQty: 0, reworkQty: 0, rejectQty: 0, grnNo: '', remarks: '' };
-        await addVSIRRecord(userUid, rec).then(() => count++).catch(() => {});
+
+    // ── 1. Import from PSIR records ──────────────────────────────────────
+    if (psirData.length > 0) {
+      for (const psir of psirData) {
+        const poNo = String(psir.poNo || '').trim();
+        if (!poNo) continue;
+
+        // Each PSIR record may carry its own item fields directly
+        const itemName = psir.itemName || psir.item || '';
+        const itemCode = psir.itemCode || psir.code || '';
+
+        if (!itemName && !itemCode) {
+          // PSIR has nested items array
+          const items: any[] = Array.isArray(psir.items) ? psir.items : [];
+          for (const item of items) {
+            const code = String(item.itemCode || item.code || '').trim();
+            const name = item.itemName || item.name || item.model || '';
+            const key = `${poNo.toLowerCase()}|${code.toLowerCase()}`;
+            if (existingCombosRef.current.has(key)) continue;
+
+            const rec: Omit<VSRIRecord, 'id'> = {
+              receivedDate: psir.date || psir.receivedDate || '',
+              indentNo: psir.indentNo || '',
+              poNo,
+              oaNo: psir.oaNo || '',
+              purchaseBatchNo: psir.batchNo || psir.purchaseBatchNo || '',
+              vendorBatchNo: '',
+              dcNo: '',
+              invoiceDcNo: psir.invoiceNo || psir.invoiceDcNo || '',
+              vendorName: psir.supplierName || psir.vendorName || psir.supplier || '',
+              itemName: name,
+              itemCode: code,
+              qtyReceived: Number(item.qty || item.qtyReceived || 0),
+              okQty: 0,
+              reworkQty: 0,
+              rejectQty: 0,
+              grnNo: psir.grnNo || '',
+              remarks: '',
+            };
+            await addVSIRRecord(userUid, rec).then(() => count++).catch(() => {});
+          }
+        } else {
+          // PSIR record has item fields at top level
+          const code = String(itemCode).trim();
+          const key = `${poNo.toLowerCase()}|${code.toLowerCase()}`;
+          if (!existingCombosRef.current.has(key)) {
+            const rec: Omit<VSRIRecord, 'id'> = {
+              receivedDate: psir.date || psir.receivedDate || '',
+              indentNo: psir.indentNo || '',
+              poNo,
+              oaNo: psir.oaNo || '',
+              purchaseBatchNo: psir.batchNo || psir.purchaseBatchNo || '',
+              vendorBatchNo: '',
+              dcNo: '',
+              invoiceDcNo: psir.invoiceNo || psir.invoiceDcNo || '',
+              vendorName: psir.supplierName || psir.vendorName || psir.supplier || '',
+              itemName,
+              itemCode: code,
+              qtyReceived: Number(psir.qty || psir.qtyReceived || 0),
+              okQty: 0,
+              reworkQty: 0,
+              rejectQty: 0,
+              grnNo: psir.grnNo || '',
+              remarks: '',
+            };
+            await addVSIRRecord(userUid, rec).then(() => count++).catch(() => {});
+          }
+        }
       }
     }
-    showToast(count > 0 ? `✓ Imported ${count} records` : 'Nothing new to import', count > 0 ? 'success' : 'info');
-  }, [userUid, records, purchaseOrders, purchaseData, vendorDeptOrders, showToast]);
+
+    // ── 2. Also import from purchase orders (as before) ──────────────────
+    const source = purchaseOrders.length > 0 ? purchaseOrders : purchaseData;
+    if (source.length > 0) {
+      const getPoNo = (o: any) => { for (const k of ['poNo', 'materialPurchasePoNo', 'po_no', 'poNumber']) { if (o[k]) return o[k]; } return undefined; };
+      const getItems = (o: any) => { if (Array.isArray(o.items) && o.items.length) return o.items; if (Array.isArray(o.materials) && o.materials.length) return o.materials; return []; };
+
+      for (const order of source) {
+        const poNo = getPoNo(order); if (!poNo) continue;
+        const items = getItems(order); if (!items.length) continue;
+        const vd = vendorDeptOrders.find((v: any) => (v.materialPurchasePoNo || '').trim() === String(poNo).trim());
+        for (const item of items) {
+          const itemCode = item.itemCode || '';
+          const key = `${String(poNo).trim().toLowerCase()}|${String(itemCode).trim().toLowerCase()}`;
+          if (existingCombosRef.current.has(key)) continue;
+          const rec: Omit<VSRIRecord, 'id'> = {
+            receivedDate: '',
+            indentNo: '',
+            poNo,
+            oaNo: vd?.oaNo || '',
+            purchaseBatchNo: vd?.batchNo || '',
+            vendorBatchNo: '',
+            dcNo: '',
+            invoiceDcNo: '',
+            vendorName: '',
+            itemName: item.itemName || item.model || '',
+            itemCode,
+            qtyReceived: item.qty || 0,
+            okQty: 0,
+            reworkQty: 0,
+            rejectQty: 0,
+            grnNo: '',
+            remarks: '',
+          };
+          await addVSIRRecord(userUid, rec).then(() => count++).catch(() => {});
+        }
+      }
+    }
+
+    if (psirData.length === 0 && source.length === 0) {
+      showToast('No PSIR or purchase data found to import', 'error');
+      return;
+    }
+
+    showToast(
+      count > 0 ? `✓ Imported ${count} record${count !== 1 ? 's' : ''} from PSIR / Purchase` : 'All records already exist — nothing new to import',
+      count > 0 ? 'success' : 'info'
+    );
+  }, [userUid, psirData, purchaseOrders, purchaseData, vendorDeptOrders, showToast]);
 
   // ─── Edit ─────────────────────────────────────────────────────────────────
   const handleEdit = useCallback((idx: number) => {
@@ -478,7 +580,12 @@ const VSIRModule: React.FC = () => {
 
   // ─── Render ───────────────────────────────────────────────────────────────
   const isEditing = editIdx !== null;
-  const availablePOs = useMemo(() => [...new Set([...purchaseOrders.map((p: any) => p.poNo), ...purchaseData.map((p: any) => p.poNo)].filter(Boolean))], [purchaseOrders, purchaseData]);
+  const availablePOs = useMemo(() => {
+    const fromPurchase = [...purchaseOrders.map((p: any) => p.poNo), ...purchaseData.map((p: any) => p.poNo)].filter(Boolean);
+    // Also include PO nos from PSIR data
+    const fromPsir = psirData.map((p: any) => String(p.poNo || '').trim()).filter(Boolean);
+    return [...new Set([...fromPurchase, ...fromPsir])];
+  }, [purchaseOrders, purchaseData, psirData]);
 
   return (
     <>
@@ -505,7 +612,15 @@ const VSIRModule: React.FC = () => {
               <p style={{ margin: '4px 0 0', fontSize: 14, color: S.textSecondary }}>Vendor Store Inspection Report — track vendor-issued materials</p>
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <button className="vs-btn vs-ghost" style={{ ...S.btnGhost, opacity: !userUid ? 0.5 : 1 }} disabled={!userUid} onClick={runImport}>↓ Import POs</button>
+              <button
+                className="vs-btn vs-ghost"
+                style={{ ...S.btnGhost, opacity: !userUid ? 0.5 : 1 }}
+                disabled={!userUid}
+                onClick={runImport}
+                title="Import records from PSIR and Purchase Orders"
+              >
+                ↓ Import PSIR / POs
+              </button>
               <button className="vs-btn vs-ghost" style={S.btnGhost} onClick={exportCSV}>↓ Export CSV</button>
             </div>
           </div>
@@ -516,7 +631,7 @@ const VSIRModule: React.FC = () => {
             <StatCard label="Total OK" value={stats.totalOK} color={S.success} sub="Accepted" />
             <StatCard label="Rework" value={stats.totalRework} color={stats.totalRework > 0 ? S.warning : S.textMuted} sub="Needs rework" />
             <StatCard label="Rejected" value={stats.totalReject} color={stats.totalReject > 0 ? S.danger : S.textMuted} sub="Rejected" />
-            <StatCard label="POs" value={availablePOs.length} color={S.textPrimary} sub="Available" />
+            <StatCard label="PSIR Records" value={psirData.length} color={S.accent} sub="Available to import" />
             <StatCard label="User" value={userUid ? '✓' : '✗'} color={userUid ? S.success : S.danger} sub={userUid ? 'Signed in' : 'Not signed in'} />
           </div>
 
@@ -702,7 +817,11 @@ const VSIRModule: React.FC = () => {
                 <tbody>
                   {filteredRecords.length === 0 ? (
                     <tr><td colSpan={20} style={{ padding: '40px 0', textAlign: 'center', color: S.textMuted, fontSize: 14 }}>
-                      {records.length === 0 ? 'No records yet. Add your first entry above or import from purchase orders.' : 'No rows match current filters.'}
+                      {records.length === 0
+                        ? (psirData.length > 0
+                          ? `No VSIR records yet. Click "↓ Import PSIR / POs" to import ${psirData.length} PSIR record${psirData.length !== 1 ? 's' : ''}.`
+                          : 'No records yet. Add your first entry above or import from PSIR / purchase orders.')
+                        : 'No rows match current filters.'}
                     </td></tr>
                   ) : filteredRecords.map((rec, rowIdx) => {
                     const origIdx = records.indexOf(rec);
