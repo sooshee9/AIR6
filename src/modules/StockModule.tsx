@@ -100,7 +100,6 @@ const StockModule: React.FC = () => {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  // Subscribed collections used for calculations
   const [psirsState, setPsirsState] = useState<any[]>([]);
   const [vendorIssuesState, setVendorIssuesState] = useState<any[]>([]);
   const [inHouseIssuesState, setInHouseIssuesState] = useState<any[]>([]);
@@ -111,7 +110,6 @@ const StockModule: React.FC = () => {
   const [itemMasterState, setItemMasterState] = useState<any[]>([]);
   const [draftPsirItems, setDraftPsirItems] = useState<any[]>([]);
 
-  // Filter state
   const [filterText, setFilterText] = useState('');
   const [showFilters, setShowFilters] = useState(false);
 
@@ -142,7 +140,6 @@ const StockModule: React.FC = () => {
     }
 
     const subs: Array<() => void> = [];
-
     const trySubscribe = (fn: () => (() => void) | undefined) => {
       try { const u = fn(); if (u) subs.push(u); } catch {}
     };
@@ -164,7 +161,6 @@ const StockModule: React.FC = () => {
     trySubscribe(() => subscribePurchaseOrders(userUid, docs => setPurchaseOrdersState(docs)));
     trySubscribe(() => subscribeVSIRRecords(userUid, docs => setVsirRecordsState(docs)));
 
-    // Direct Firestore listeners for collections without helpers
     try {
       const unsubInHouse = onSnapshot(collection(db, 'users', userUid, 'inHouseIssues'), snap =>
         setInHouseIssuesState(snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })))
@@ -179,7 +175,6 @@ const StockModule: React.FC = () => {
       subs.push(unsubIndent);
     } catch {}
 
-    // One-time item master load
     getItemMaster(userUid).then(items => setItemMasterState((items || []) as any[])).catch(() => setItemMasterState([]));
 
     unsubsRef.current = subs;
@@ -201,47 +196,60 @@ const StockModule: React.FC = () => {
     return () => { try { bus.removeEventListener('psir.updated', handler as EventListener); } catch {}; };
   }, []);
 
-  // ─── Dispatch stock.updated ───────────────────────────────────────────────
   useEffect(() => {
     try { bus.dispatchEvent(new CustomEvent('stock.updated', { detail: { records } })); } catch {}
   }, [records]);
 
-  // ─── Memoized index maps for O(1) lookups ─────────────────────────────────
+  // ─── Helpers ──────────────────────────────────────────────────────────────
   const normalize = useCallback((s: any) => s == null ? '' : String(s).trim().toLowerCase(), []);
 
-  // Map: itemCode → total vendorIssuedQty
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX: vendorIssuedMap now reads ONLY from Vendor Issues items.qty
+  //      (previously getAdjustedVendorIssuedQty subtracted VSIR received,
+  //       causing the displayed value to be wrong — showing 76 instead of 46)
+  // ─────────────────────────────────────────────────────────────────────────
   const vendorIssuedMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const issue of vendorIssuesState) {
       if (!Array.isArray(issue.items)) continue;
       for (const item of issue.items) {
-        if (typeof item.qty === 'number') {
-          const k = String(item.itemCode || '');
-          m.set(k, (m.get(k) || 0) + item.qty);
-        }
+        const qty = Number(item.qty) || 0;
+        if (!qty) continue;
+        const k = String(item.itemCode || '').trim();
+        if (k) m.set(k, (m.get(k) || 0) + qty);
       }
     }
     return m;
   }, [vendorIssuesState]);
 
-  // Map: itemCode → total vsirReceivedQty (ok + rework + reject)
+  // Raw vendor issued qty (straight sum from Vendor Issue items) — used for display
+  const getVendorIssuedQtyTotal = useCallback(
+    (itemCode: string) => vendorIssuedMap.get(String(itemCode).trim()) || 0,
+    [vendorIssuedMap]
+  );
+
+  // VSIR received (ok+rework+reject) — used only for vendorQty adjustment, NOT for vendorIssued display
   const vsirReceivedMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of vsirRecordsState) {
-      const k = String(r.itemCode || '');
+      const k = String(r.itemCode || '').trim();
       const qty = (Number(r.okQty) || 0) + (Number(r.reworkQty) || 0) + (Number(r.rejectQty) || 0);
-      m.set(k, (m.get(k) || 0) + qty);
+      if (k && qty) m.set(k, (m.get(k) || 0) + qty);
     }
     return m;
   }, [vsirRecordsState]);
 
-  // Map: itemCode → vendorDeptQty and vendorDeptOkQty
+  const getVSIRReceivedQtyTotal = useCallback(
+    (itemCode: string) => vsirReceivedMap.get(String(itemCode).trim()) || 0,
+    [vsirReceivedMap]
+  );
+
   const vendorDeptMap = useMemo(() => {
     const qty = new Map<string, number>(), ok = new Map<string, number>();
     for (const order of vendorDeptState) {
       if (!Array.isArray(order.items)) continue;
       for (const item of order.items) {
-        const k = String(item.itemCode || '');
+        const k = String(item.itemCode || '').trim();
         if (typeof item.qty === 'number') qty.set(k, (qty.get(k) || 0) + item.qty);
         if (typeof item.okQty === 'number') ok.set(k, (ok.get(k) || 0) + item.okQty);
       }
@@ -249,34 +257,31 @@ const StockModule: React.FC = () => {
     return { qty, ok };
   }, [vendorDeptState]);
 
-  // Map: itemCode → purchaseQty
   const purchaseQtyMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const entry of purchaseOrdersState) {
       if (Array.isArray(entry.items)) {
         for (const item of entry.items) {
-          if (typeof item.qty === 'number') { const k = String(item.itemCode || ''); m.set(k, (m.get(k) || 0) + item.qty); }
+          if (typeof item.qty === 'number') { const k = String(item.itemCode || '').trim(); m.set(k, (m.get(k) || 0) + item.qty); }
         }
       } else if (entry.itemCode && typeof entry.qty === 'number') {
-        const k = String(entry.itemCode); m.set(k, (m.get(k) || 0) + entry.qty);
+        const k = String(entry.itemCode).trim(); m.set(k, (m.get(k) || 0) + entry.qty);
       }
     }
     return m;
   }, [purchaseOrdersState]);
 
-  // Map: itemCode → indentQty
   const indentQtyMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const indent of indentState) {
       if (!Array.isArray(indent.items)) continue;
       for (const item of indent.items) {
-        if (item.itemCode && typeof item.qty === 'number') { const k = String(item.itemCode); m.set(k, (m.get(k) || 0) + item.qty); }
+        if (item.itemCode && typeof item.qty === 'number') { const k = String(item.itemCode).trim(); m.set(k, (m.get(k) || 0) + item.qty); }
       }
     }
     return m;
   }, [indentState]);
 
-  // Map: {name|code} → psirOkQty (across psirs + draft)
   const psirOkMap = useMemo(() => {
     const m = new Map<string, number>();
     const add = (nameKey: string, codeKey: string, val: number) => {
@@ -294,7 +299,6 @@ const StockModule: React.FC = () => {
     return m;
   }, [psirsState, draftPsirItems, normalize]);
 
-  // Map: {code|type} → inHouseIssuedQty
   const inHouseMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const issue of inHouseIssuesState) {
@@ -305,35 +309,26 @@ const StockModule: React.FC = () => {
         const txType = item.transactionType || '';
         const qty = Number(item.issueQty || item.qty || 0);
         if (!qty) continue;
-        const byType = `code:${code}:type:${txType}`;
-        m.set(byType, (m.get(byType) || 0) + qty);
-        const anyType = `code:${code}:type:*`;
-        m.set(anyType, (m.get(anyType) || 0) + qty);
-        const byName = `name:${name}`;
-        m.set(byName, (m.get(byName) || 0) + qty);
-        const byNameCode = `name:${name}:code:${code}`;
-        m.set(byNameCode, (m.get(byNameCode) || 0) + qty);
+        m.set(`code:${code}:type:${txType}`, (m.get(`code:${code}:type:${txType}`) || 0) + qty);
+        m.set(`code:${code}:type:*`, (m.get(`code:${code}:type:*`) || 0) + qty);
+        m.set(`name:${name}`, (m.get(`name:${name}`) || 0) + qty);
+        m.set(`name:${name}:code:${code}`, (m.get(`name:${name}:code:${code}`) || 0) + qty);
         if (txType === 'Stock') {
-          const stockKey = `stock:name:${name}:code:${code}`;
-          m.set(stockKey, (m.get(stockKey) || 0) + qty);
+          m.set(`stock:name:${name}:code:${code}`, (m.get(`stock:name:${name}:code:${code}`) || 0) + qty);
         }
       }
     }
     return m;
   }, [inHouseIssuesState, normalize]);
 
-  // ─── Derived quantity getters (O(1) map lookups) ──────────────────────────
-  const getVendorIssuedQtyTotal = useCallback((itemCode: string) => vendorIssuedMap.get(String(itemCode)) || 0, [vendorIssuedMap]);
-  const getVSIRReceivedQtyTotal = useCallback((itemCode: string) => vsirReceivedMap.get(String(itemCode)) || 0, [vsirReceivedMap]);
-  const getVendorDeptQtyTotal = useCallback((itemCode: string) => vendorDeptMap.qty.get(String(itemCode)) || 0, [vendorDeptMap]);
-  const getVendorDeptOkQtyTotal = useCallback((itemCode: string) => vendorDeptMap.ok.get(String(itemCode)) || 0, [vendorDeptMap]);
-  const getPurchaseQtyTotal = useCallback((itemCode: string) => purchaseQtyMap.get(String(itemCode)) || 0, [purchaseQtyMap]);
-  const getIndentQtyTotal = useCallback((itemCode: string) => indentQtyMap.get(String(itemCode)) || 0, [indentQtyMap]);
+  // ─── Getters ──────────────────────────────────────────────────────────────
+  const getVendorDeptOkQtyTotal = useCallback((itemCode: string) => vendorDeptMap.ok.get(String(itemCode).trim()) || 0, [vendorDeptMap]);
+  const getPurchaseQtyTotal = useCallback((itemCode: string) => purchaseQtyMap.get(String(itemCode).trim()) || 0, [purchaseQtyMap]);
+  const getIndentQtyTotal = useCallback((itemCode: string) => indentQtyMap.get(String(itemCode).trim()) || 0, [indentQtyMap]);
 
   const getPSIROkQtyTotal = useCallback((itemName: string, itemCode?: string) => {
-    const nName = normalize(itemName), nCode = normalize(itemCode);
-    const byName = psirOkMap.get('name:' + nName) || 0;
-    const byCode = psirOkMap.get('code:' + nCode) || 0;
+    const byName = psirOkMap.get('name:' + normalize(itemName)) || 0;
+    const byCode = psirOkMap.get('code:' + normalize(itemCode)) || 0;
     return Math.max(byName, byCode);
   }, [psirOkMap, normalize]);
 
@@ -343,9 +338,8 @@ const StockModule: React.FC = () => {
   }, [inHouseMap, normalize]);
 
   const getInHouseIssuedQtyByItemName = useCallback((itemName: string, itemCode?: string) => {
-    const name = normalize(itemName), code = normalize(itemCode);
-    const byName = inHouseMap.get(`name:${name}`) || 0;
-    const byCode = inHouseMap.get(`code:${code}:type:*`) || 0;
+    const byName = inHouseMap.get(`name:${normalize(itemName)}`) || 0;
+    const byCode = inHouseMap.get(`code:${normalize(itemCode)}:type:*`) || 0;
     return Math.max(byName, byCode);
   }, [inHouseMap, normalize]);
 
@@ -353,61 +347,73 @@ const StockModule: React.FC = () => {
     return inHouseMap.get(`stock:name:${normalize(itemName)}:code:${normalize(itemCode)}`) || 0;
   }, [inHouseMap, normalize]);
 
-  const getAdjustedVendorIssuedQty = useCallback((itemCode: string) => {
-    return Math.max(0, getVendorIssuedQtyTotal(itemCode) - getVSIRReceivedQtyTotal(itemCode));
-  }, [getVendorIssuedQtyTotal, getVSIRReceivedQtyTotal]);
+  // ─────────────────────────────────────────────────────────────────────────
+  // COLUMN DEFINITIONS — what each column actually means:
+  //
+  //  vendorIssuedQty  = qty sent OUT to vendor  → raw sum from Vendor Issues
+  //  vendorOkQty      = qty returned OK from vendor → vendorDept okQty - inHouse(Vendor)
+  //  vendorQty        = stock currently at vendor → vendorIssued - vsirReceived
+  //
+  // The old getAdjustedVendorIssuedQty was doing (vendorIssued - vsirReceived)
+  // which is the "stock at vendor" concept, not "qty issued to vendor".
+  // That's why 76 appeared instead of 46.
+  // ─────────────────────────────────────────────────────────────────────────
 
-  const getAdjustedVendorOkQty = useCallback((itemCode: string) => {
-    return Math.max(0, getVendorDeptOkQtyTotal(itemCode) - getInHouseIssuedQtyByTransactionType(itemCode, 'Vendor'));
-  }, [getVendorDeptOkQtyTotal, getInHouseIssuedQtyByTransactionType]);
+  const getVendorOkQty = useCallback((itemCode: string) =>
+    Math.max(0, getVendorDeptOkQtyTotal(itemCode) - getInHouseIssuedQtyByTransactionType(itemCode, 'Vendor')),
+  [getVendorDeptOkQtyTotal, getInHouseIssuedQtyByTransactionType]);
 
-  const getAdjustedPurStoreOkQty = useCallback((itemName: string, itemCode?: string) => {
+  const getPurStoreOkQty = useCallback((itemName: string, itemCode?: string) => {
     const psirOk = getPSIROkQtyTotal(itemName, itemCode);
     const inHousePurchase = getInHouseIssuedQtyByTransactionType(itemCode || '', 'Purchase');
     const vendorIssued = getVendorIssuedQtyTotal(itemCode || '');
     return Math.max(0, psirOk - inHousePurchase - vendorIssued);
   }, [getPSIROkQtyTotal, getInHouseIssuedQtyByTransactionType, getVendorIssuedQtyTotal]);
 
+  // Stock currently sitting with the vendor (sent but not yet inspected back)
+  const getVendorQty = useCallback((itemCode: string) =>
+    Math.max(0, getVendorIssuedQtyTotal(itemCode) - getVSIRReceivedQtyTotal(itemCode)),
+  [getVendorIssuedQtyTotal, getVSIRReceivedQtyTotal]);
+
   const computeClosingStock = useCallback((itemName: string, itemCode: string, stockQty: number) => {
     return (Number(stockQty) || 0)
-      + getAdjustedPurStoreOkQty(itemName, itemCode)
-      + getAdjustedVendorOkQty(itemCode)
+      + getPurStoreOkQty(itemName, itemCode)
+      + getVendorOkQty(itemCode)
       - getInHouseIssuedQtyByItemNameStockOnly(itemName, itemCode);
-  }, [getAdjustedPurStoreOkQty, getAdjustedVendorOkQty, getInHouseIssuedQtyByItemNameStockOnly]);
+  }, [getPurStoreOkQty, getVendorOkQty, getInHouseIssuedQtyByItemNameStockOnly]);
 
-  // ─── Live computed values for current form item ───────────────────────────
+  // ─── Live form preview ─────────────────────────────────────────────────────
   const liveCalc = useMemo(() => {
     const { itemName, itemCode, stockQty } = form;
     if (!itemName && !itemCode) return null;
-    const vendorDeptTotal = getVendorDeptQtyTotal(itemCode);
-    const vendorIssuedTotal = getVendorIssuedQtyTotal(itemCode);
     return {
       indentQty: getIndentQtyTotal(itemCode),
       purchaseQty: getPurchaseQtyTotal(itemCode),
-      vendorQty: Math.max(0, vendorDeptTotal - vendorIssuedTotal),
-      purStoreOkQty: getAdjustedPurStoreOkQty(itemName, itemCode),
-      vendorOkQty: getAdjustedVendorOkQty(itemCode),
+      vendorQty: getVendorQty(itemCode),
+      purStoreOkQty: getPurStoreOkQty(itemName, itemCode),
+      vendorOkQty: getVendorOkQty(itemCode),
       inHouseIssuedQty: getInHouseIssuedQtyByItemName(itemName, itemCode),
-      vendorIssuedQty: getAdjustedVendorIssuedQty(itemCode),
+      vendorIssuedQty: getVendorIssuedQtyTotal(itemCode),  // ← FIX: raw qty, not adjusted
       closingStock: computeClosingStock(itemName, itemCode, stockQty),
     };
-  }, [form, getIndentQtyTotal, getPurchaseQtyTotal, getVendorDeptQtyTotal, getVendorIssuedQtyTotal, getAdjustedPurStoreOkQty, getAdjustedVendorOkQty, getInHouseIssuedQtyByItemName, getAdjustedVendorIssuedQty, computeClosingStock]);
+  }, [form, getIndentQtyTotal, getPurchaseQtyTotal, getVendorQty, getPurStoreOkQty,
+      getVendorOkQty, getInHouseIssuedQtyByItemName, getVendorIssuedQtyTotal, computeClosingStock]);
 
-  // ─── Filter ───────────────────────────────────────────────────────────────
+  // ─── Filter + stats ───────────────────────────────────────────────────────
   const filteredRecords = useMemo(() => {
     if (!filterText) return records;
     const q = filterText.toLowerCase();
     return records.filter(r => [r.itemName, r.itemCode, r.batchNo].some(f => String(f || '').toLowerCase().includes(q)));
   }, [records, filterText]);
 
-  // ─── Stats ────────────────────────────────────────────────────────────────
-  const totalClosing = useMemo(() => records.reduce((s, r) => s + computeClosingStock(r.itemName, r.itemCode, r.stockQty), 0), [records, computeClosingStock]);
+  const totalClosing = useMemo(() =>
+    records.reduce((s, r) => s + computeClosingStock(r.itemName, r.itemCode, r.stockQty), 0),
+  [records, computeClosingStock]);
 
-  // ─── Form change handler ──────────────────────────────────────────────────
+  // ─── Form change ──────────────────────────────────────────────────────────
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value, type } = e.target;
     if (name === 'itemName') {
-      // value holds itemCode (the <option value>), find matching item
       const found = itemMasterState.find(item => item.itemCode === value);
       setForm(prev => ({ ...prev, itemName: found ? found.itemName : '', itemCode: found ? found.itemCode : '' }));
     } else {
@@ -420,17 +426,15 @@ const StockModule: React.FC = () => {
     e.preventDefault();
     if (!form.itemName) { showToast('Item Name is required', 'error'); return; }
 
-    const vendorDeptTotal = getVendorDeptQtyTotal(form.itemCode);
-    const vendorIssuedTotal = getVendorIssuedQtyTotal(form.itemCode);
     const autoRecord: RecordForm = {
       ...form,
       indentQty: getIndentQtyTotal(form.itemCode),
       purchaseQty: getPurchaseQtyTotal(form.itemCode),
-      vendorQty: Math.max(0, vendorDeptTotal - vendorIssuedTotal),
-      purStoreOkQty: getAdjustedPurStoreOkQty(form.itemName, form.itemCode),
-      vendorOkQty: getAdjustedVendorOkQty(form.itemCode),
+      vendorQty: getVendorQty(form.itemCode),
+      purStoreOkQty: getPurStoreOkQty(form.itemName, form.itemCode),
+      vendorOkQty: getVendorOkQty(form.itemCode),
       inHouseIssuedQty: getInHouseIssuedQtyByItemName(form.itemName, form.itemCode),
-      vendorIssuedQty: getAdjustedVendorIssuedQty(form.itemCode),
+      vendorIssuedQty: getVendorIssuedQtyTotal(form.itemCode),  // ← FIX: raw qty
       closingStock: computeClosingStock(form.itemName, form.itemCode, form.stockQty),
     };
 
@@ -456,7 +460,9 @@ const StockModule: React.FC = () => {
       }
     }
     setForm({ ...EMPTY_FORM });
-  }, [form, editIdx, records, userUid, getIndentQtyTotal, getPurchaseQtyTotal, getVendorDeptQtyTotal, getVendorIssuedQtyTotal, getAdjustedPurStoreOkQty, getAdjustedVendorOkQty, getInHouseIssuedQtyByItemName, getAdjustedVendorIssuedQty, computeClosingStock, showToast]);
+  }, [form, editIdx, records, userUid, getIndentQtyTotal, getPurchaseQtyTotal, getVendorQty,
+      getPurStoreOkQty, getVendorOkQty, getInHouseIssuedQtyByItemName, getVendorIssuedQtyTotal,
+      computeClosingStock, showToast]);
 
   const handleEdit = useCallback((idx: number) => {
     setForm({ ...records[idx] });
@@ -492,23 +498,21 @@ const StockModule: React.FC = () => {
 
       <ToastContainer toasts={toasts} />
 
-      <div style={{ background: S.bg, minHeight: '100vh', fontFamily: "'Geist', 'DM Sans', system-ui, sans-serif" }}>
+      <div style={{ background: S.bg, fontFamily: "'Geist', 'DM Sans', system-ui, sans-serif" }}>
         <div style={{ maxWidth: 1600, margin: '0 auto', padding: '24px 24px 48px' }}>
 
-          {/* ── Header ───────────────────────────────────────────────────── */}
+          {/* ── Header ── */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
             <div>
               <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: S.textPrimary, letterSpacing: '-0.02em' }}>Stock Module</h1>
               <p style={{ margin: '4px 0 0', fontSize: 14, color: S.textSecondary }}>Real-time stock tracking across purchase, vendor, and in-house flows</p>
             </div>
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <span style={{ fontSize: 12, color: userUid ? S.success : S.danger, fontWeight: 600 }}>
-                {userUid ? '● Synced' : '● Offline'}
-              </span>
-            </div>
+            <span style={{ fontSize: 12, color: userUid ? S.success : S.danger, fontWeight: 600 }}>
+              {userUid ? '● Synced' : '● Offline'}
+            </span>
           </div>
 
-          {/* ── Stats ────────────────────────────────────────────────────── */}
+          {/* ── Stats ── */}
           <div style={{ display: 'flex', gap: 14, marginBottom: 24, flexWrap: 'wrap' }}>
             <StatCard label="Stock Items" value={records.length} />
             <StatCard label="Item Master" value={itemMasterState.length} sub="available" color={itemMasterState.length === 0 ? S.warning : S.textPrimary} />
@@ -518,7 +522,7 @@ const StockModule: React.FC = () => {
             <StatCard label="Total Closing" value={totalClosing} color={totalClosing < 0 ? S.danger : S.success} sub="across all items" />
           </div>
 
-          {/* ── Form ─────────────────────────────────────────────────────── */}
+          {/* ── Form ── */}
           <div style={{ ...S.card, marginBottom: 24 }}>
             <h2 style={{ margin: '0 0 20px', fontSize: 16, fontWeight: 700, color: S.textPrimary }}>
               {isEditing ? '✎ Edit Stock Record' : 'New Stock Record'}
@@ -526,59 +530,33 @@ const StockModule: React.FC = () => {
 
             <form onSubmit={handleSubmit}>
               <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 16 }}>
-
-                {/* ── Item Name dropdown — shows ONLY item name, no code ── */}
                 <Field label="Item Name" style={{ flex: '1 1 220px' }}>
-                  <select
-                    name="itemName"
-                    className="sk-input"
+                  <select name="itemName" className="sk-input"
                     style={{ ...S.input, borderColor: itemMasterState.length === 0 ? S.warning : S.borderStrong }}
-                    value={form.itemCode}
-                    onChange={handleChange}
-                  >
-                    <option value="">
-                      {itemMasterState.length === 0 ? 'Item Master not loaded…' : 'Select item…'}
-                    </option>
+                    value={form.itemCode} onChange={handleChange}>
+                    <option value="">{itemMasterState.length === 0 ? 'Item Master not loaded…' : 'Select item…'}</option>
                     {itemMasterState.map(item => (
-                      <option key={item.id || item.itemCode} value={item.itemCode}>
-                        {item.itemName}
-                      </option>
+                      <option key={item.id || item.itemCode} value={item.itemCode}>{item.itemName}</option>
                     ))}
                   </select>
                 </Field>
-
-                {/* ── Item Code — auto-filled read-only ── */}
                 <Field label="Item Code">
-                  <input
-                    style={{ ...S.inputDisabled, width: 130 }}
-                    value={form.itemCode}
-                    readOnly
-                    placeholder="Auto-filled"
-                  />
+                  <input style={{ ...S.inputDisabled, width: 130 }} value={form.itemCode} readOnly placeholder="Auto-filled" />
                 </Field>
-
-                {/* Batch No (manual) */}
                 <Field label="Batch No">
                   <input name="batchNo" className="sk-input" style={{ ...S.input, width: 130 }} placeholder="Optional" value={form.batchNo} onChange={handleChange} />
                 </Field>
-
-                {/* Stock Qty (manual) */}
                 <Field label="Opening Stock Qty">
                   <input type="number" name="stockQty" className="sk-input" style={{ ...S.input, width: 120 }} placeholder="0" min={0} value={form.stockQty || ''} onChange={handleChange} />
                 </Field>
-
-                {/* In-House Issued (auto) */}
                 <Field label="In-House Issued Qty">
                   <input style={{ ...S.inputDisabled, width: 130 }} value={liveCalc?.inHouseIssuedQty ?? 0} readOnly />
                 </Field>
-
-                {/* Vendor Issued (auto) */}
                 <Field label="Vendor Issued Qty">
                   <input style={{ ...S.inputDisabled, width: 120 }} value={liveCalc?.vendorIssuedQty ?? 0} readOnly />
                 </Field>
               </div>
 
-              {/* Live-computed read-only preview */}
               {liveCalc && (
                 <div style={{ background: S.bg, border: `1px solid ${S.border}`, borderRadius: 10, padding: '16px 20px', marginBottom: 16 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: S.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>Auto-computed fields</div>
@@ -586,21 +564,19 @@ const StockModule: React.FC = () => {
                     {[
                       { label: 'Indent Qty', value: liveCalc.indentQty },
                       { label: 'Purchase Qty', value: liveCalc.purchaseQty },
-                      { label: 'Vendor Qty', value: liveCalc.vendorQty },
+                      { label: 'Vendor Qty', value: liveCalc.vendorQty, hint: 'Issued − VSIR received' },
                       { label: 'Pur Store OK Qty', value: liveCalc.purStoreOkQty, accent: true },
                       { label: 'Vendor OK Qty', value: liveCalc.vendorOkQty, accent: true },
                       { label: 'Closing Stock', value: liveCalc.closingStock, closing: true },
                     ].map(f => (
                       <div key={f.label} style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 100 }}>
                         <span style={{ ...S.label, marginBottom: 2 }}>{f.label}</span>
+                        {f.hint && <span style={{ fontSize: 10, color: S.textMuted, marginBottom: 2 }}>{f.hint}</span>}
                         <span style={{
-                          fontSize: f.closing ? 22 : 18,
-                          fontWeight: 800,
+                          fontSize: f.closing ? 22 : 18, fontWeight: 800,
                           color: f.closing ? (liveCalc.closingStock < 0 ? S.danger : S.success) : f.accent ? S.accent : S.textPrimary,
                           fontVariantNumeric: 'tabular-nums',
-                        }}>
-                          {f.value}
-                        </span>
+                        }}>{f.value}</span>
                       </div>
                     ))}
                   </div>
@@ -621,7 +597,7 @@ const StockModule: React.FC = () => {
             </form>
           </div>
 
-          {/* ── Records table ─────────────────────────────────────────────── */}
+          {/* ── Records table ── */}
           <div style={S.card}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -677,14 +653,17 @@ const StockModule: React.FC = () => {
                     </td></tr>
                   ) : filteredRecords.map((rec, rowIdx) => {
                     const origIdx = records.indexOf(rec);
-                    const purStoreOkQty = getAdjustedPurStoreOkQty(rec.itemName, rec.itemCode);
-                    const vendorOkQty = getAdjustedVendorOkQty(rec.itemCode);
+                    // All columns computed live — always up to date
+                    const indentQty     = getIndentQtyTotal(rec.itemCode);
+                    const purchaseQty   = getPurchaseQtyTotal(rec.itemCode);
+                    const vendorQty     = getVendorQty(rec.itemCode);
+                    const purStoreOkQty = getPurStoreOkQty(rec.itemName, rec.itemCode);
+                    const vendorOkQty   = getVendorOkQty(rec.itemCode);
                     const inHouseIssued = getInHouseIssuedQtyByItemName(rec.itemName, rec.itemCode);
-                    const vendorIssued = getAdjustedVendorIssuedQty(rec.itemCode);
-                    const indentQty = getIndentQtyTotal(rec.itemCode);
-                    const purchaseQty = getPurchaseQtyTotal(rec.itemCode);
-                    const vendorDeptQty = Math.max(0, getVendorDeptQtyTotal(rec.itemCode) - getVendorIssuedQtyTotal(rec.itemCode));
-                    const closing = computeClosingStock(rec.itemName, rec.itemCode, rec.stockQty);
+                    // ↓ FIX: use raw vendorIssuedQtyTotal, NOT the old "adjusted" value
+                    const vendorIssued  = getVendorIssuedQtyTotal(rec.itemCode);
+                    const closing       = computeClosingStock(rec.itemName, rec.itemCode, rec.stockQty);
+
                     return (
                       <tr key={rec.id} className="sk-row" style={{ background: rowIdx % 2 === 1 ? S.bg : S.surface }}>
                         <td style={{ ...S.td, textAlign: 'center', color: S.textMuted, fontSize: 12 }}>{rowIdx + 1}</td>
@@ -695,7 +674,7 @@ const StockModule: React.FC = () => {
                         <td style={{ padding: 0, background: S.border, width: 2 }} />
                         <td style={S.tdRight}>{indentQty}</td>
                         <td style={S.tdRight}>{purchaseQty}</td>
-                        <td style={S.tdRight}>{vendorDeptQty}</td>
+                        <td style={S.tdRight}>{vendorQty}</td>
                         <td style={{ padding: 0, background: S.border, width: 2 }} />
                         <td style={{ ...S.tdRight, color: S.accent, fontWeight: 600 }}>{purStoreOkQty}</td>
                         <td style={{ ...S.tdRight, color: S.accent, fontWeight: 600 }}>{vendorOkQty}</td>
