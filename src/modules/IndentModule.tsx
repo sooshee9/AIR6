@@ -23,7 +23,6 @@ interface IndentModuleProps { user?: any; }
 
 // ─── Design System ────────────────────────────────────────────────────────────
 const S = {
-  // Colors
   bg: '#F7F8FC',
   surface: '#FFFFFF',
   border: '#E4E8F0',
@@ -42,7 +41,6 @@ const S = {
   textMuted: '#9CA3AF',
   numericRight: 'right' as const,
 
-  // Card
   card: {
     background: '#FFFFFF',
     border: '1px solid #E4E8F0',
@@ -51,7 +49,6 @@ const S = {
     boxShadow: '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
   } as React.CSSProperties,
 
-  // Input
   input: {
     padding: '8px 12px',
     borderRadius: 8,
@@ -75,7 +72,6 @@ const S = {
     cursor: 'not-allowed',
   } as React.CSSProperties,
 
-  // Buttons
   btnPrimary: {
     background: '#3B5BDB',
     color: '#fff',
@@ -226,18 +222,10 @@ function ToastContainer({ toasts }: { toasts: Toast[] }) {
     <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, display: 'flex', flexDirection: 'column', gap: 8 }}>
       {toasts.map(t => (
         <div key={t.id} style={{
-          padding: '12px 18px',
-          borderRadius: 10,
-          fontSize: 14,
-          fontWeight: 500,
-          color: '#fff',
+          padding: '12px 18px', borderRadius: 10, fontSize: 14, fontWeight: 500, color: '#fff',
           background: t.type === 'success' ? '#2F9E44' : t.type === 'error' ? '#C92A2A' : '#3B5BDB',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-          animation: 'slideUp 0.2s ease',
-          maxWidth: 340,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.18)', animation: 'slideUp 0.2s ease',
+          maxWidth: 340, display: 'flex', alignItems: 'center', gap: 8,
         }}>
           {t.type === 'success' ? '✓' : t.type === 'error' ? '✕' : 'ℹ'} {t.msg}
         </div>
@@ -246,7 +234,6 @@ function ToastContainer({ toasts }: { toasts: Toast[] }) {
   );
 }
 
-// ─── Small reusable components ────────────────────────────────────────────────
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -298,7 +285,6 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
   }, []);
 
-  // Filter state
   const [showFilters, setShowFilters] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'OPEN' | 'CLOSED'>('ALL');
@@ -306,18 +292,15 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
   const [filterDateTo, setFilterDateTo] = useState('');
   const activeFilterCount = [filterText, filterStatus !== 'ALL', filterDateFrom, filterDateTo].filter(Boolean).length;
 
-  // Form state
   const [newIndent, setNewIndent] = useState<Indent>({ indentNo: '', date: '', indentBy: '', oaNo: '', items: [] });
   const [itemInput, setItemInput] = useState<IndentItem>({ model: '', itemCode: '', qty: 0, indentClosed: false });
   const [editIdx, setEditIdx] = useState<number | null>(null);
 
-  // Unsubscribe refs
   const unsubRefs = useRef<Array<() => void>>([]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       if (u) {
-        // Load item master
         getItemMaster(u.uid)
           .then(items => setItemMaster((items || []) as any[]))
           .catch(() => setItemMaster([]));
@@ -347,7 +330,7 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
     };
   }, []);
 
-  // ─── Stock lookup (memoized map) ───────────────────────────────────────────
+  // ─── Stock map (memoized) ──────────────────────────────────────────────────
   const stockMap = useMemo<Map<string, number>>(() => {
     const map = new Map<string, number>();
     const norm = (v: any) => String(v ?? '').trim().toUpperCase();
@@ -371,8 +354,6 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
         val = sq + po + vo - ih;
       }
       map.set(key, val);
-
-      // Also index by alpha-normalized key for fuzzy matching
       const ak = alpha(key);
       if (ak && !map.has('~' + ak)) map.set('~' + ak, val);
     }
@@ -408,7 +389,11 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
     return poMap.get(String(itemCode).trim().toUpperCase()) || 0;
   }, [poMap]);
 
-  // ─── Indent analysis (memoized per-row) ───────────────────────────────────
+  // ─── Indent analysis ──────────────────────────────────────────────────────
+  // ✅ ROOT CAUSE FIX: Firestore returns docs in insertion order.
+  // If S-8/25-02 was saved after S-8/25-01, the array may arrive as [02, 01].
+  // We must sort ascending by serial number BEFORE iterating cumulativeAllocated,
+  // otherwise Prev Qty is 0 for 01 and 30 for 02 — exactly backwards.
   const indentAnalysisRows = useMemo(() => {
     const rows: Array<{
       indentNo: string; date: string; indentBy: string; oaNo: string;
@@ -417,30 +402,48 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
       availableForThisIndent: number; allocatedAvailable: number; isClosed: boolean;
     }> = [];
 
-    // Track cumulative allocated per itemCode as we iterate
+    // Sort ascending by trailing serial number: S-8/25-01 → S-8/25-02 → …
+    const sortedIndents = [...indents].sort((a, b) => {
+      const parse = (no: string) => {
+        const m = no.match(/(\d+)$/);
+        return m ? parseInt(m[1], 10) : 0;
+      };
+      return parse(a.indentNo) - parse(b.indentNo);
+    });
+
+    // Cumulative ALLOCATED qty per normalised item code
     const cumulativeAllocated = new Map<string, number>();
 
-    for (let i = 0; i < indents.length; i++) {
-      const indent = indents[i];
+    for (const indent of sortedIndents) {
       for (const item of indent.items) {
-        const code = item.itemCode;
-        const totalStock = getStock(code);
-        const poQuantity = getPOQuantity(code);
+        // Normalise code for consistent map lookups
+        const code = String(item.itemCode || '').trim().toUpperCase();
+        const totalStock = getStock(code) || getStock(item.itemCode);
+        const poQuantity = getPOQuantity(code) || getPOQuantity(item.itemCode);
+
         const previousIndentsQty = cumulativeAllocated.get(code) || 0;
+
+        // Stock left BEFORE this indent consumes anything
         const availableBefore = totalStock - previousIndentsQty;
-        const nonNegBefore = Math.max(0, availableBefore);
-        const allocatedAvailable = Math.min(nonNegBefore, Number(item.qty) || 0);
+
+        // CLOSED = enough stock to fully satisfy this indent
         const isClosed = availableBefore >= (Number(item.qty) || 0);
-        const availableForThisIndent = (totalStock + poQuantity) - previousIndentsQty - (Number(item.qty) || 0);
+
+        // Actual amount allocated = min(what's available, what's requested) — never < 0
+        const allocatedAvailable = Math.min(Math.max(0, availableBefore), Number(item.qty) || 0);
+
+        // Net after this indent (negative = shortfall shown in red)
+        const availableForThisIndent =
+          (totalStock + poQuantity) - previousIndentsQty - (Number(item.qty) || 0);
 
         rows.push({
-          indentNo: indent.indentNo,
-          date: indent.date,
-          indentBy: indent.indentBy,
-          oaNo: indent.oaNo,
-          model: item.model,
-          itemCode: code,
-          qty: Number(item.qty) || 0,
+          indentNo:  indent.indentNo,
+          date:      indent.date,
+          indentBy:  indent.indentBy,
+          oaNo:      indent.oaNo,
+          model:     item.model,
+          itemCode:  item.itemCode,   // original for display
+          qty:       Number(item.qty) || 0,
           totalStock,
           previousIndentsQty,
           poQuantity,
@@ -449,7 +452,8 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
           isClosed,
         });
 
-        // Update cumulative
+        // Accumulate ALLOCATED (not requested) — partial open indents still
+        // consume partial stock, reducing availability for later indents
         cumulativeAllocated.set(code, previousIndentsQty + allocatedAvailable);
       }
     }
@@ -457,7 +461,7 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
     return rows;
   }, [indents, getStock, getPOQuantity]);
 
-  // O(1) lookup helpers derived from memoized rows
+  // O(1) helpers derived from memoized rows
   const getAllocatedStock = useCallback((itemCode: string) => {
     return indentAnalysisRows
       .filter(r => r.itemCode === itemCode)
@@ -468,10 +472,7 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
     const totalStock = getStock(itemCode);
     const poQty = getPOQuantity(itemCode);
     const allocated = getAllocatedStock(itemCode);
-
     let available = totalStock + poQty - allocated;
-
-    // Subtract pending items in current (unsaved) indent
     for (const item of newIndent.items) {
       if (item.itemCode === itemCode) {
         const alloc = Math.min(Math.max(0, available), Number(item.qty) || 0);
@@ -492,7 +493,6 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
     return base + String(lastSerial + 1).padStart(2, '0');
   }, [indents]);
 
-  // Init indentNo once indents load
   useEffect(() => {
     setNewIndent(prev => prev.indentNo ? prev : { ...prev, indentNo: getNextIndentNo() });
   }, [indents]);
@@ -548,15 +548,12 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
     }
 
     const indentNo = getNextIndentNo();
-    const dedupKey = (ind: Indent) => `${ind.indentNo}`;
-    const updated = [...indents.filter(i => dedupKey(i) !== indentNo), { ...newIndent, indentNo }];
+    const updated = [...indents.filter(i => i.indentNo !== indentNo), { ...newIndent, indentNo }];
 
     setIndents(updated);
-
     replaceFirestoreCollection(uid, 'indentData', updated).then(() => {
       showToast(`Indent ${indentNo} saved successfully`, 'success');
-    }).catch((err) => {
-      console.warn('Failed to save indent:', err);
+    }).catch(() => {
       showToast('Failed to save indent. Please try again.', 'error');
     });
 
@@ -567,64 +564,48 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
   // ─── Publish open/closed items ────────────────────────────────────────────
   useEffect(() => {
     if (indents.length === 0 && stockRecords.length === 0) return;
-
     const openItems: any[] = [];
     const closedItems: any[] = [];
 
     indentAnalysisRows.forEach(row => {
       const payload = {
-        model: row.model,
-        itemCode: row.itemCode,
-        qty: row.qty,
-        indentClosed: row.isClosed,
-        indentNo: row.indentNo,
-        date: row.date,
-        indentBy: row.indentBy,
-        oaNo: row.oaNo,
-        stock: row.totalStock,
-        availableForThisIndent: row.availableForThisIndent,
-        qty1: row.allocatedAvailable,
-        Item: row.model,
-        Code: row.itemCode,
+        model: row.model, itemCode: row.itemCode, qty: row.qty,
+        indentClosed: row.isClosed, indentNo: row.indentNo,
+        date: row.date, indentBy: row.indentBy, oaNo: row.oaNo,
+        stock: row.totalStock, availableForThisIndent: row.availableForThisIndent,
+        qty1: row.allocatedAvailable, Item: row.model, Code: row.itemCode,
       };
       (row.isClosed ? closedItems : openItems).push(payload);
     });
 
     replaceFirestoreCollection(uid, 'openIndentItems', openItems).catch(() => {});
     replaceFirestoreCollection(uid, 'closedIndentItems', closedItems).catch(() => {});
-
-    try {
-      bus.dispatchEvent(new CustomEvent('indents.updated', { detail: { openItems, closedItems } }));
-    } catch {}
+    try { bus.dispatchEvent(new CustomEvent('indents.updated', { detail: { openItems, closedItems } })); } catch {}
   }, [indentAnalysisRows, uid]);
 
-  // Listen for stock.updated events
   useEffect(() => {
     const handler = () => setIndents(prev => [...prev]);
     try { bus.addEventListener('stock.updated', handler as EventListener); } catch {}
     return () => { try { bus.removeEventListener('stock.updated', handler as EventListener); } catch {} };
   }, []);
 
-  // Listen for storage events
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key && ['stock-records', 'indentData', 'purchaseOrders'].includes(e.key)) {
+      if (e.key && ['stock-records', 'indentData', 'purchaseOrders'].includes(e.key))
         setIndents(prev => [...prev]);
-      }
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
   }, []);
 
-  // ─── Export filtered rows as CSV ──────────────────────────────────────────
+  // ─── Export CSV ───────────────────────────────────────────────────────────
   const exportToCSV = useCallback(() => {
     const headers = [
-      'Date', 'Indent No', 'Model', 'Item Code', 'Qty', 'Indent By', 'OA NO',
-      'Total Stock', 'Previous Indents Qty', 'PO Quantity',
-      'Available for This Indent', 'Allocated Available',
-      'Remaining Stock', 'Allocated Stock', 'Status',
+      'Date','Indent No','Model','Item Code','Qty','Indent By','OA NO',
+      'Total Stock','Previous Indents Qty','PO Quantity',
+      'Available for This Indent','Allocated Available',
+      'Remaining Stock','Allocated Stock','Status',
     ];
-
     const today = new Date().toISOString().slice(0, 10);
     const rows = filteredRows.map(r => [
       r.date, r.indentNo, r.model, r.itemCode, r.qty, r.indentBy, r.oaNo,
@@ -633,19 +614,12 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
       getRemainingStock(r.itemCode), getAllocatedStock(r.itemCode),
       r.isClosed ? 'CLOSED' : 'OPEN',
     ]);
-
-    const escape = (v: any) => {
-      const s = String(v ?? '');
-      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-
+    const escape = (v: any) => { const s = String(v ?? ''); return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s; };
     const csv = '\uFEFF' + [headers, ...rows].map(row => row.map(escape).join(',')).join('\r\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url;
-    a.download = `Indents_${today}.csv`;
-    a.click();
+    a.href = url; a.download = `Indents_${today}.csv`; a.click();
     URL.revokeObjectURL(url);
     showToast(`Exported ${filteredRows.length} rows`, 'success');
   }, [indentAnalysisRows, getRemainingStock, getAllocatedStock, showToast]);
@@ -671,12 +645,9 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
   const stats = useMemo(() => {
     const total = indentAnalysisRows.length;
     const closed = indentAnalysisRows.filter(r => r.isClosed).length;
-    const open = total - closed;
-    const totalIndents = new Set(indentAnalysisRows.map(r => r.indentNo)).size;
-    return { total, closed, open, totalIndents };
+    return { total, closed, open: total - closed, totalIndents: new Set(indentAnalysisRows.map(r => r.indentNo)).size };
   }, [indentAnalysisRows]);
 
-  // ─── Pending item table preview stats ─────────────────────────────────────
   const pendingStats = useMemo(() => {
     const insufficient = newIndent.items.filter(i => Number(i.qty) > getStock(i.itemCode)).length;
     return { insufficient, total: newIndent.items.length };
@@ -714,18 +685,12 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                 Track and manage material indents with live stock analysis
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button
-                className="im-btn im-ghost"
-                style={{ ...S.btnGhost }}
-                onClick={exportToCSV}
-              >
-                ↓ Export CSV
-              </button>
-            </div>
+            <button className="im-btn im-ghost" style={{ ...S.btnGhost }} onClick={exportToCSV}>
+              ↓ Export CSV
+            </button>
           </div>
 
-          {/* Stats bar */}
+          {/* Stats */}
           <div style={{ display: 'flex', gap: 14, marginBottom: 24, flexWrap: 'wrap' }}>
             <StatCard label="Total Indents" value={stats.totalIndents} />
             <StatCard label="Total Lines" value={stats.total} />
@@ -735,42 +700,20 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
             <StatCard label="Stock Records" value={stockRecords.length} color={stockRecords.length === 0 ? S.warning : S.textPrimary} sub={stockRecords.length === 0 ? 'Loading…' : 'records loaded'} />
           </div>
 
-          {/* ── Create Indent Form ───────────────────────────────────────── */}
+          {/* Create Indent Form */}
           <div style={{ ...S.card, marginBottom: 24 }}>
-            <h2 style={{ margin: '0 0 20px', fontSize: 16, fontWeight: 700, color: S.textPrimary }}>
-              New Indent
-            </h2>
+            <h2 style={{ margin: '0 0 20px', fontSize: 16, fontWeight: 700, color: S.textPrimary }}>New Indent</h2>
 
-            {/* Indent header fields */}
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 20 }}>
               <Field label="Indent No">
-                <input
-                  className="im-input"
-                  style={{ ...S.inputDisabled, width: 140 }}
-                  value={newIndent.indentNo || getNextIndentNo()}
-                  disabled
-                />
+                <input className="im-input" style={{ ...S.inputDisabled, width: 140 }} value={newIndent.indentNo || getNextIndentNo()} disabled />
               </Field>
               <Field label="Date">
-                <input
-                  type="date"
-                  className="im-input"
-                  style={{ ...S.input, width: 160 }}
-                  value={newIndent.date}
-                  onChange={e => setNewIndent(p => ({ ...p, date: e.target.value }))}
-                />
+                <input type="date" className="im-input" style={{ ...S.input, width: 160 }} value={newIndent.date} onChange={e => setNewIndent(p => ({ ...p, date: e.target.value }))} />
               </Field>
               <Field label="Indent By">
-                <select
-                  className="im-input"
-                  style={{ ...S.input, width: 140 }}
-                  value={newIndent.indentBy}
-                  onChange={e => {
-                    const v = e.target.value;
-                    const nextOA = getNextOANo(v);
-                    setNewIndent(p => ({ ...p, indentBy: v, oaNo: nextOA }));
-                  }}
-                >
+                <select className="im-input" style={{ ...S.input, width: 140 }} value={newIndent.indentBy}
+                  onChange={e => { const v = e.target.value; setNewIndent(p => ({ ...p, indentBy: v, oaNo: getNextOANo(v) })); }}>
                   <option value="">Select…</option>
                   <option value="HKG">HKG</option>
                   <option value="NGR">NGR</option>
@@ -779,145 +722,79 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
               </Field>
               <Field label="OA No">
                 <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    className="im-input"
-                    style={{ ...S.input, width: 160 }}
-                    placeholder="e.g. OA-1234"
-                    value={newIndent.oaNo}
+                  <input className="im-input" style={{ ...S.input, width: 160 }} placeholder="e.g. OA-1234" value={newIndent.oaNo}
                     onChange={e => setNewIndent(p => ({ ...p, oaNo: e.target.value }))}
                     onBlur={() => {
                       if (newIndent.oaNo.trim().toLowerCase() === 'stock' && newIndent.indentBy) {
-                        const formatted = getNextOANo(newIndent.indentBy, newIndent.oaNo);
-                        if (formatted) setNewIndent(p => ({ ...p, oaNo: formatted }));
+                        const f = getNextOANo(newIndent.indentBy, newIndent.oaNo);
+                        if (f) setNewIndent(p => ({ ...p, oaNo: f }));
                       }
                     }}
                   />
-                  <button
-                    className="im-btn"
-                    style={{ ...S.btnGhost, padding: '8px 12px', fontSize: 13 }}
-                    title="Auto-generate Stock OA No"
+                  <button className="im-btn" style={{ ...S.btnGhost, padding: '8px 12px', fontSize: 13 }} title="Auto-generate Stock OA No"
                     onClick={() => {
                       if (!newIndent.indentBy) { showToast('Select Indent By first', 'error'); return; }
-                      const formatted = getNextOANo(newIndent.indentBy, 'Stock');
-                      if (formatted) setNewIndent(p => ({ ...p, oaNo: formatted }));
-                    }}
-                  >
-                    Auto
-                  </button>
+                      const f = getNextOANo(newIndent.indentBy, 'Stock');
+                      if (f) setNewIndent(p => ({ ...p, oaNo: f }));
+                    }}>Auto</button>
                 </div>
               </Field>
             </div>
 
-            {/* Divider */}
             <div style={{ borderTop: `1px dashed ${S.border}`, margin: '0 0 20px' }} />
 
-            {/* Item entry fields */}
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <Field label="Item Name">
-                <select
-                  name="itemName"
-                  className="im-input"
-                  style={{
-                    ...S.input,
-                    minWidth: 260,
-                    borderColor: itemMaster.length === 0 ? S.warning : S.borderStrong,
-                  }}
-                  value={itemInput.model}
-                  onChange={handleChange}
-                >
-                  <option value="">
-                    {itemMaster.length === 0 ? 'Loading item master…' : 'Select item…'}
-                  </option>
+                <select name="itemName" className="im-input"
+                  style={{ ...S.input, minWidth: 260, borderColor: itemMaster.length === 0 ? S.warning : S.borderStrong }}
+                  value={itemInput.model} onChange={handleChange}>
+                  <option value="">{itemMaster.length === 0 ? 'Loading item master…' : 'Select item…'}</option>
                   {itemMaster.map(item => (
-                    <option key={item.itemCode} value={item.itemName}>
-                      {item.itemName} — {item.itemCode}
-                    </option>
+                    <option key={item.itemCode} value={item.itemName}>{item.itemName} — {item.itemCode}</option>
                   ))}
                 </select>
               </Field>
               <Field label="Item Code">
-                <input
-                  className="im-input"
-                  style={{ ...S.inputDisabled, width: 140 }}
-                  value={itemInput.itemCode}
-                  readOnly
-                  placeholder="Auto-filled"
-                />
+                <input className="im-input" style={{ ...S.inputDisabled, width: 140 }} value={itemInput.itemCode} readOnly placeholder="Auto-filled" />
               </Field>
               <Field label="Quantity">
-                <input
-                  type="number"
-                  className="im-input"
-                  style={{ ...S.input, width: 100 }}
-                  placeholder="0"
+                <input type="number" className="im-input" style={{ ...S.input, width: 100 }} placeholder="0"
                   value={itemInput.qty === 0 ? '' : itemInput.qty}
                   onChange={e => setItemInput(p => ({ ...p, qty: e.target.value === '' ? 0 : Number(e.target.value) }))}
-                  min={1}
-                />
+                  min={1} />
               </Field>
               {itemInput.itemCode && (
                 <div style={{
-                  padding: '8px 12px',
+                  padding: '8px 12px', borderRadius: 8, fontSize: 13,
                   background: getStock(itemInput.itemCode) > 0 ? S.successLight : S.dangerLight,
-                  borderRadius: 8,
-                  fontSize: 13,
                   color: getStock(itemInput.itemCode) > 0 ? S.success : S.danger,
-                  fontWeight: 600,
-                  alignSelf: 'flex-end',
-                  marginBottom: 0,
+                  fontWeight: 600, alignSelf: 'flex-end',
                 }}>
                   Stock: {getStock(itemInput.itemCode)}
                 </div>
               )}
               <div style={{ alignSelf: 'flex-end' }}>
-                <button
-                  className="im-btn"
-                  style={{
-                    ...S.btnPrimary,
-                    background: editIdx !== null ? '#7048E8' : S.accent,
-                  }}
-                  onClick={handleAddItem}
-                >
+                <button className="im-btn" style={{ ...S.btnPrimary, background: editIdx !== null ? '#7048E8' : S.accent }} onClick={handleAddItem}>
                   {editIdx !== null ? '✎ Update Item' : '+ Add Item'}
                 </button>
               </div>
             </div>
 
-            {/* Pending items table */}
             {newIndent.items.length > 0 && (
               <div style={{ marginTop: 20 }}>
                 <div style={{
-                  padding: '12px 16px',
-                  background: pendingStats.insufficient > 0 ? S.warningLight : S.successLight,
+                  padding: '12px 16px', background: pendingStats.insufficient > 0 ? S.warningLight : S.successLight,
                   border: `1px solid ${pendingStats.insufficient > 0 ? '#FFE066' : '#A9E6B8'}`,
-                  borderRadius: 8,
-                  marginBottom: 12,
-                  display: 'flex',
-                  gap: 20,
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
+                  borderRadius: 8, marginBottom: 12, display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'center',
                 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: S.textPrimary }}>
-                    {newIndent.items.length} item{newIndent.items.length !== 1 ? 's' : ''} queued
-                  </span>
-                  {pendingStats.insufficient > 0 ? (
-                    <span style={{ fontSize: 13, color: S.warning, fontWeight: 600 }}>
-                      ⚠ {pendingStats.insufficient} item{pendingStats.insufficient !== 1 ? 's' : ''} with insufficient stock
-                    </span>
-                  ) : (
-                    <span style={{ fontSize: 13, color: S.success, fontWeight: 600 }}>
-                      ✓ All items have sufficient stock
-                    </span>
-                  )}
-                  {stockRecords.length === 0 && (
-                    <span style={{ fontSize: 13, color: S.warning }}>
-                      Stock records loading…
-                    </span>
-                  )}
+                  <span style={{ fontSize: 13, fontWeight: 600, color: S.textPrimary }}>{newIndent.items.length} item{newIndent.items.length !== 1 ? 's' : ''} queued</span>
+                  {pendingStats.insufficient > 0
+                    ? <span style={{ fontSize: 13, color: S.warning, fontWeight: 600 }}>⚠ {pendingStats.insufficient} item{pendingStats.insufficient !== 1 ? 's' : ''} with insufficient stock</span>
+                    : <span style={{ fontSize: 13, color: S.success, fontWeight: 600 }}>✓ All items have sufficient stock</span>}
                 </div>
 
                 <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${S.border}` }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
                       <tr>
                         <th style={{ ...S.th, minWidth: 180 }}>Item Name</th>
@@ -935,9 +812,7 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                         const insufficient = Number(item.qty) > avail;
                         let cumulativePending = 0;
                         for (let i = 0; i <= idx; i++) cumulativePending += Number(newIndent.items[i].qty) || 0;
-                        const savedAllocated = getAllocatedStock(item.itemCode);
-                        const remaining = avail - savedAllocated - cumulativePending;
-
+                        const remaining = avail - getAllocatedStock(item.itemCode) - cumulativePending;
                         return (
                           <tr key={idx} className="im-row" style={{ background: insufficient ? '#FFF9F9' : 'inherit' }}>
                             <td style={S.tdClip} title={item.model}>{item.model}</td>
@@ -946,23 +821,15 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                             <td style={{ ...S.tdRight, color: insufficient ? S.danger : S.success, fontWeight: 600 }}>{avail}</td>
                             <td style={{ ...S.tdRight, color: remaining >= 0 ? S.success : S.danger, fontWeight: 600 }}>{remaining}</td>
                             <td style={{ ...S.td, textAlign: 'center' }}>
-                              {insufficient
-                                ? <span style={{ fontSize: 12, color: S.warning, fontWeight: 700 }}>⚠ LOW</span>
-                                : <span style={{ fontSize: 12, color: S.success, fontWeight: 700 }}>✓ OK</span>
-                              }
+                              {insufficient ? <span style={{ fontSize: 12, color: S.warning, fontWeight: 700 }}>⚠ LOW</span>
+                                           : <span style={{ fontSize: 12, color: S.success, fontWeight: 700 }}>✓ OK</span>}
                             </td>
                             <td style={{ ...S.td, textAlign: 'center' }}>
                               <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
-                                <button
-                                  className="im-btn im-edit-btn"
-                                  style={S.btnEdit}
-                                  onClick={() => { setItemInput(newIndent.items[idx]); setEditIdx(idx); }}
-                                >Edit</button>
-                                <button
-                                  className="im-btn im-danger-btn"
-                                  style={S.btnDanger}
-                                  onClick={() => setNewIndent(p => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))}
-                                >✕</button>
+                                <button className="im-btn im-edit-btn" style={S.btnEdit}
+                                  onClick={() => { setItemInput(newIndent.items[idx]); setEditIdx(idx); }}>Edit</button>
+                                <button className="im-btn im-danger-btn" style={S.btnDanger}
+                                  onClick={() => setNewIndent(p => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))}>✕</button>
                               </div>
                             </td>
                           </tr>
@@ -973,160 +840,70 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                 </div>
 
                 <div style={{ marginTop: 16, display: 'flex', gap: 10 }}>
-                  <button
-                    className="im-btn"
-                    style={{
-                      ...S.btnSuccess,
-                      opacity: newIndent.items.length === 0 ? 0.5 : 1,
-                      cursor: newIndent.items.length === 0 ? 'not-allowed' : 'pointer',
-                    }}
-                    onClick={handleAddIndent}
-                    disabled={newIndent.items.length === 0}
-                  >
-                    ✓ Save Indent
-                  </button>
-                  <button
-                    className="im-btn im-ghost"
-                    style={S.btnGhost}
-                    onClick={() => {
-                      setNewIndent({ indentNo: getNextIndentNo(), date: '', indentBy: '', oaNo: '', items: [] });
-                      setItemInput({ model: '', itemCode: '', qty: 0, indentClosed: false });
-                      setEditIdx(null);
-                    }}
-                  >
-                    Clear
-                  </button>
+                  <button className="im-btn" style={{ ...S.btnSuccess, opacity: newIndent.items.length === 0 ? 0.5 : 1, cursor: newIndent.items.length === 0 ? 'not-allowed' : 'pointer' }}
+                    onClick={handleAddIndent} disabled={newIndent.items.length === 0}>✓ Save Indent</button>
+                  <button className="im-btn im-ghost" style={S.btnGhost}
+                    onClick={() => { setNewIndent({ indentNo: getNextIndentNo(), date: '', indentBy: '', oaNo: '', items: [] }); setItemInput({ model: '', itemCode: '', qty: 0, indentClosed: false }); setEditIdx(null); }}>Clear</button>
                 </div>
               </div>
             )}
 
             {newIndent.items.length === 0 && (
               <div style={{ marginTop: 16 }}>
-                <button
-                  className="im-btn"
-                  style={{ ...S.btnSuccess, opacity: 0.4, cursor: 'not-allowed' }}
-                  disabled
-                >
-                  ✓ Save Indent
-                </button>
+                <button className="im-btn" style={{ ...S.btnSuccess, opacity: 0.4, cursor: 'not-allowed' }} disabled>✓ Save Indent</button>
               </div>
             )}
           </div>
 
-          {/* ── Indent Records ───────────────────────────────────────────── */}
+          {/* Indent Records Table */}
           <div style={S.card}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: S.textPrimary }}>
-                  Indent Records
-                </h2>
-                <span style={{
-                  fontSize: 12, fontWeight: 600, color: S.textSecondary,
-                  background: S.bg, padding: '2px 10px', borderRadius: 20,
-                  border: `1px solid ${S.border}`,
-                }}>
+                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: S.textPrimary }}>Indent Records</h2>
+                <span style={{ fontSize: 12, fontWeight: 600, color: S.textSecondary, background: S.bg, padding: '2px 10px', borderRadius: 20, border: `1px solid ${S.border}` }}>
                   {filteredRows.length} of {indentAnalysisRows.length} rows
                 </span>
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button
-                  className="im-btn im-ghost"
-                  style={{
-                    ...S.btnGhost,
-                    borderColor: showFilters ? S.accent : S.border,
-                    color: showFilters ? S.accent : S.textSecondary,
-                    position: 'relative',
-                  }}
-                  onClick={() => setShowFilters(f => !f)}
-                >
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="im-btn im-ghost"
+                  style={{ ...S.btnGhost, borderColor: showFilters ? S.accent : S.border, color: showFilters ? S.accent : S.textSecondary, position: 'relative' }}
+                  onClick={() => setShowFilters(f => !f)}>
                   ⚙ Filters
                   {activeFilterCount > 0 && (
-                    <span style={{
-                      position: 'absolute', top: -6, right: -6,
-                      background: S.accent, color: '#fff',
-                      borderRadius: '50%', width: 16, height: 16,
-                      fontSize: 10, fontWeight: 700,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}>{activeFilterCount}</span>
+                    <span style={{ position: 'absolute', top: -6, right: -6, background: S.accent, color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{activeFilterCount}</span>
                   )}
                 </button>
-                <button
-                  className="im-btn im-ghost"
-                  style={S.btnGhost}
-                  onClick={exportToCSV}
-                >
-                  ↓ CSV
-                </button>
+                <button className="im-btn im-ghost" style={S.btnGhost} onClick={exportToCSV}>↓ CSV</button>
               </div>
             </div>
 
-            {/* Filter bar */}
             {showFilters && (
-              <div style={{
-                background: S.bg,
-                border: `1px solid ${S.border}`,
-                borderRadius: 8,
-                padding: '14px 16px',
-                marginBottom: 16,
-                display: 'flex',
-                gap: 12,
-                flexWrap: 'wrap',
-                alignItems: 'flex-end',
-              }}>
+              <div style={{ background: S.bg, border: `1px solid ${S.border}`, borderRadius: 8, padding: '14px 16px', marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                 <Field label="Search">
-                  <input
-                    className="im-input"
-                    style={{ ...S.input, minWidth: 220 }}
-                    placeholder="Item, code, indent no, OA…"
-                    value={filterText}
-                    onChange={e => setFilterText(e.target.value)}
-                  />
+                  <input className="im-input" style={{ ...S.input, minWidth: 220 }} placeholder="Item, code, indent no, OA…" value={filterText} onChange={e => setFilterText(e.target.value)} />
                 </Field>
                 <Field label="Status">
-                  <select
-                    className="im-input"
-                    style={{ ...S.input, width: 130 }}
-                    value={filterStatus}
-                    onChange={e => setFilterStatus(e.target.value as any)}
-                  >
+                  <select className="im-input" style={{ ...S.input, width: 130 }} value={filterStatus} onChange={e => setFilterStatus(e.target.value as any)}>
                     <option value="ALL">All</option>
                     <option value="OPEN">Open</option>
                     <option value="CLOSED">Closed</option>
                   </select>
                 </Field>
                 <Field label="Date From">
-                  <input
-                    type="date"
-                    className="im-input"
-                    style={{ ...S.input, width: 150 }}
-                    value={filterDateFrom}
-                    onChange={e => setFilterDateFrom(e.target.value)}
-                  />
+                  <input type="date" className="im-input" style={{ ...S.input, width: 150 }} value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} />
                 </Field>
                 <Field label="Date To">
-                  <input
-                    type="date"
-                    className="im-input"
-                    style={{ ...S.input, width: 150 }}
-                    value={filterDateTo}
-                    onChange={e => setFilterDateTo(e.target.value)}
-                  />
+                  <input type="date" className="im-input" style={{ ...S.input, width: 150 }} value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} />
                 </Field>
                 {activeFilterCount > 0 && (
-                  <button
-                    className="im-btn im-ghost"
-                    style={{ ...S.btnGhost, alignSelf: 'flex-end', color: S.danger, borderColor: '#FECACA' }}
-                    onClick={() => { setFilterText(''); setFilterStatus('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }}
-                  >
-                    ✕ Clear all
-                  </button>
+                  <button className="im-btn im-ghost" style={{ ...S.btnGhost, alignSelf: 'flex-end', color: S.danger, borderColor: '#FECACA' }}
+                    onClick={() => { setFilterText(''); setFilterStatus('ALL'); setFilterDateFrom(''); setFilterDateTo(''); }}>✕ Clear all</button>
                 )}
               </div>
             )}
 
-            {/* Records table */}
             <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${S.border}` }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr>
                     <th style={{ ...S.th, minWidth: 95 }}>Date</th>
@@ -1150,16 +927,12 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                   {filteredRows.length === 0 ? (
                     <tr>
                       <td colSpan={15} style={{ padding: '40px 0', textAlign: 'center', color: S.textMuted, fontSize: 14 }}>
-                        {indentAnalysisRows.length === 0
-                          ? 'No indent records yet. Create your first indent above.'
-                          : 'No rows match the current filters.'}
+                        {indentAnalysisRows.length === 0 ? 'No indent records yet. Create your first indent above.' : 'No rows match the current filters.'}
                       </td>
                     </tr>
                   ) : filteredRows.map((r, rowIdx) => {
                     const availBadgeColor = r.availableForThisIndent >= 0 ? S.success : S.danger;
                     const availBg = r.availableForThisIndent >= 0 ? S.successLight : S.dangerLight;
-
-                    // Find original indent/item index for deletion
                     const origIndentIndex = indents.findIndex(i => i.indentNo === r.indentNo);
                     const origItemIndex = origIndentIndex >= 0
                       ? indents[origIndentIndex].items.findIndex(i => i.itemCode === r.itemCode && i.model === r.model && i.qty === r.qty)
@@ -1179,18 +952,8 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                         <td style={{ ...S.tdRight, color: S.textSecondary }}>{r.previousIndentsQty}</td>
                         <td style={{ ...S.tdRight, color: r.poQuantity > 0 ? S.accent : S.textSecondary }}>{r.poQuantity}</td>
                         <td style={{ padding: 0, background: S.border, width: 2 }} />
-                        <td style={{ ...S.tdRight }}>
-                          <span style={{
-                            display: 'inline-block',
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            fontWeight: 700,
-                            fontSize: 13,
-                            background: availBg,
-                            color: availBadgeColor,
-                            minWidth: 44,
-                            textAlign: 'right',
-                          }}>
+                        <td style={S.tdRight}>
+                          <span style={{ display: 'inline-block', padding: '3px 8px', borderRadius: 6, fontWeight: 700, fontSize: 13, background: availBg, color: availBadgeColor, minWidth: 44, textAlign: 'right' }}>
                             {r.availableForThisIndent}
                           </span>
                         </td>
@@ -1198,24 +961,18 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                           <StatusBadge closed={r.isClosed} />
                         </td>
                         <td style={{ ...S.td, textAlign: 'center' }}>
-                          <button
-                            className="im-btn im-danger-btn"
-                            style={{ ...S.btnDanger, padding: '3px 8px' }}
+                          <button className="im-btn im-danger-btn" style={{ ...S.btnDanger, padding: '3px 8px' }}
                             onClick={() => {
                               if (origIndentIndex < 0 || origItemIndex < 0) return;
-                              const updated = indents.map((ind, idx) => {
-                                if (idx !== origIndentIndex) return ind;
-                                return { ...ind, items: ind.items.filter((_, i) => i !== origItemIndex) };
-                              }).filter(ind => ind.items.length > 0);
+                              const updated = indents
+                                .map((ind, idx) => idx !== origIndentIndex ? ind : { ...ind, items: ind.items.filter((_, i) => i !== origItemIndex) })
+                                .filter(ind => ind.items.length > 0);
                               setIndents(updated);
-                              replaceFirestoreCollection(uid, 'indentData', updated).then(() => {
-                                showToast('Item removed', 'success');
-                              }).catch(() => {
-                                showToast('Failed to save changes', 'error');
-                              });
+                              replaceFirestoreCollection(uid, 'indentData', updated)
+                                .then(() => showToast('Item removed', 'success'))
+                                .catch(() => showToast('Failed to save changes', 'error'));
                             }}
-                            title="Delete this line"
-                          >✕</button>
+                            title="Delete this line">✕</button>
                         </td>
                       </tr>
                     );
@@ -1231,6 +988,7 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
               </div>
             )}
           </div>
+
         </div>
       </div>
     </>
