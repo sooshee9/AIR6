@@ -37,6 +37,79 @@ const NAV_ITEMS: { key: ModuleKey; label: string; icon: string }[] = [
   { key: 'itemMaster',   label: 'Item Master',    icon: '🗂️' },
 ];
 
+// ─── Shared Module Footer Pills ───────────────────────────────────────────────
+// Moved here from StockModule so every module benefits from the same footer
+function ModuleFooter({
+  activeModule,
+  onNavigate,
+}: {
+  activeModule: ModuleKey;
+  onNavigate: (key: ModuleKey) => void;
+}) {
+  return (
+    <div style={{
+      marginTop: 40,
+      borderTop: '2px solid rgba(21,101,192,0.25)',
+      paddingTop: 20,
+      background: 'linear-gradient(90deg, #071525 0%, #0f2540 50%, #071525 100%)',
+      borderRadius: '0 0 14px 14px',
+    }}>
+      {/* Calligraphic label */}
+      <div style={{
+        fontFamily: '"Palatino Linotype", Palatino, Georgia, serif',
+        textAlign: 'center',
+        fontSize: 11,
+        fontStyle: 'italic',
+        color: 'rgba(212,175,55,0.55)',
+        letterSpacing: '0.22em',
+        textTransform: 'uppercase',
+        marginBottom: 14,
+      }}>
+        ✦ AIRTECH ERP · Inventory Modules ✦
+      </div>
+
+      {/* Module pills — clickable, highlight active */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, padding: '0 16px' }}>
+        {NAV_ITEMS.map(({ key, label, icon }) => {
+          const isActive = activeModule === key;
+          return (
+            <button
+              key={key}
+              onClick={() => onNavigate(key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '6px 14px', borderRadius: 20,
+                background: isActive ? 'rgba(21,101,192,0.28)' : 'rgba(255,255,255,0.05)',
+                border: isActive ? '1px solid rgba(66,165,245,0.5)' : '1px solid rgba(255,255,255,0.1)',
+                fontSize: 12,
+                color: isActive ? '#42a5f5' : 'rgba(200,220,255,0.55)',
+                fontWeight: isActive ? 700 : 500,
+                cursor: 'pointer',
+                fontFamily: 'Inter, system-ui, sans-serif',
+                transition: 'all 0.15s',
+                boxShadow: isActive ? '0 0 10px rgba(21,101,192,0.25)' : 'none',
+              }}
+            >
+              <span style={{ fontSize: 14 }}>{icon}</span>
+              <span>{label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Copyright */}
+      <div style={{
+        textAlign: 'center', marginTop: 16, paddingBottom: 16,
+        fontSize: 11, color: 'rgba(255,255,255,0.15)', letterSpacing: '0.1em',
+        fontFamily: '"Palatino Linotype", Palatino, Georgia, serif',
+        fontStyle: 'italic',
+      }}>
+        © AIRTECH ERP · Inventory Management System
+      </div>
+    </div>
+  );
+}
+
 // ─── Hard Reset ───────────────────────────────────────────────────────────────
 async function handleHardReset(uid: string) {
   if (!window.confirm('⚠️ This will permanently delete ALL data except Item Master. Continue?')) return;
@@ -230,7 +303,7 @@ function App() {
           padding: 0 20px 24px;
         }
 
-        /* The white card wrapper — DO NOT set overflow:hidden here */
+        /* The white card wrapper */
         .erp-content {
           background: #fff;
           border-radius: 14px;
@@ -240,10 +313,7 @@ function App() {
           overflow: visible;
         }
 
-        /*
-         * KEY FIX: every module renders its own outer div with minHeight:'100vh'.
-         * Override that here so it doesn't create extra scroll space inside the card.
-         */
+        /* Stop modules from inflating height with min-height:100vh */
         .erp-content > * {
           min-height: unset !important;
         }
@@ -263,17 +333,19 @@ function App() {
           background: linear-gradient(90deg, transparent, rgba(21,101,192,0.5), transparent);
         }
 
+        /* Nav icon row */
         .erp-nav {
           display: flex; justify-content: center; align-items: center;
-          gap: 4px; padding: 10px 16px;
+          gap: 4px; padding: 8px 16px 4px;
           overflow-x: auto; flex-wrap: nowrap;
           scrollbar-width: none;
+          border-bottom: 1px solid rgba(21,101,192,0.18);
         }
         .erp-nav::-webkit-scrollbar { display: none; }
 
         .erp-nav-btn {
           display: flex; flex-direction: column; align-items: center; gap: 4px;
-          padding: 8px 16px; border-radius: 10px;
+          padding: 7px 14px; border-radius: 10px;
           border: 1px solid transparent;
           background: transparent;
           color: rgba(255,255,255,0.6);
@@ -299,6 +371,45 @@ function App() {
         }
         .erp-nav-btn.active .nav-icon { filter: drop-shadow(0 0 4px rgba(66,165,245,0.6)); }
 
+        /* Module pill row inside footer */
+        .erp-module-pills {
+          display: flex; justify-content: center; align-items: center;
+          gap: 6px; padding: 8px 16px;
+          overflow-x: auto; flex-wrap: wrap;
+          border-top: 1px solid rgba(21,101,192,0.12);
+        }
+
+        .erp-pill-btn {
+          display: flex; align-items: center; gap: 5px;
+          padding: 5px 12px; border-radius: 20px;
+          border: 1px solid rgba(255,255,255,0.1);
+          background: rgba(255,255,255,0.05);
+          color: rgba(200,220,255,0.55);
+          font-family: 'Inter', sans-serif;
+          font-size: 11px; font-weight: 500;
+          cursor: pointer; white-space: nowrap;
+          transition: all 0.15s;
+        }
+        .erp-pill-btn:hover {
+          background: rgba(255,255,255,0.09);
+          color: rgba(200,220,255,0.85);
+        }
+        .erp-pill-btn.active {
+          background: rgba(21,101,192,0.28);
+          border-color: rgba(66,165,245,0.5);
+          color: #42a5f5;
+          font-weight: 700;
+          box-shadow: 0 0 8px rgba(21,101,192,0.2);
+        }
+
+        /* Anchor icon next to "Stock Records" heading — shared style */
+        .erp-anchor-icon {
+          font-size: 20px;
+          color: #3B5BDB;
+          line-height: 1;
+          flex-shrink: 0;
+        }
+
         @keyframes headerShimmer {
           from { background-position: 200% 0; } to { background-position: -200% 0; }
         }
@@ -309,10 +420,9 @@ function App() {
         {/* ── Header ── */}
         <header className="erp-header">
 
-          {/* Brand */}
+          {/* Brand — ⚓ anchor replaces the plain "A" letter */}
           <div className="erp-brand">
-            {/* Letter "A" icon — no broken image dependency */}
-            <div className="erp-brand-icon">A</div>
+            <div className="erp-brand-icon" title="Airtech ERP">⚓</div>
             <div className="erp-brand-text">
               <div className="erp-brand-name">AIRTECH&nbsp;<span className="erp-suffix">ERP</span></div>
               <div className="erp-brand-sub">Inventory Management</div>
@@ -342,7 +452,7 @@ function App() {
           </div>
         </header>
 
-        {/* ── Scrollable body between header and footer ── */}
+        {/* ── Scrollable body ── */}
         <div className="erp-body">
           <main className="erp-main">
             <div className="erp-content">
@@ -350,11 +460,16 @@ function App() {
                 {renderModule()}
               </ErrorBoundary>
             </div>
+
+            {/* ── Shared Module Footer Pills (below the content card) ── */}
+            <ModuleFooter activeModule={activeModule} onNavigate={setActiveModule} />
           </main>
         </div>
 
-        {/* ── Footer Nav ── */}
+        {/* ── Footer Nav (icon + label buttons) ── */}
         <footer className="erp-footer">
+
+          {/* Top row: icon nav buttons */}
           <nav className="erp-nav">
             {NAV_ITEMS.map(({ key, label, icon }) => (
               <button
@@ -367,6 +482,21 @@ function App() {
               </button>
             ))}
           </nav>
+
+          {/* Bottom row: compact pill shortcuts */}
+          <div className="erp-module-pills">
+            {NAV_ITEMS.map(({ key, label, icon }) => (
+              <button
+                key={key}
+                className={`erp-pill-btn${activeModule === key ? ' active' : ''}`}
+                onClick={() => setActiveModule(key)}
+              >
+                <span>{icon}</span>
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+
         </footer>
 
       </div>
