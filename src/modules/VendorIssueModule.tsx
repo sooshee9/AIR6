@@ -58,7 +58,7 @@ function deduplicate(arr: VendorIssue[]): VendorIssue[] {
   });
 }
 
-// ─── Global CSS (same design language as VendorDeptModule) ───────────────────
+// ─── Global CSS ───────────────────────────────────────────────────────────────
 
 const GLOBAL_STYLES = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -338,7 +338,9 @@ const VendorIssueModule: React.FC = () => {
     return { oaNo, batchNo, vendorBatchNo, vendorName, dcNo };
   }, [getDeptOrder, getOaFromPSIR, getBatchFromPSIR, getVendorBatchFromVSIR]);
 
-  // ── Auto-fill newIssue when PO changes ──────────────────────────────────
+  // ── Auto-fill newIssue fields when PO changes ────────────────────────────
+  // NOTE: This only fills header fields (OA, Batch, Vendor etc.) — it does NOT
+  // create or save any issue. Issue is only created when user clicks "+ Add Issue".
   useEffect(() => {
     const poNo = newIssue.materialPurchasePoNo;
     if (!poNo) return;
@@ -354,6 +356,7 @@ const VendorIssueModule: React.FC = () => {
   }, [newIssue.materialPurchasePoNo, vendorDeptOrders, psirData, vsirRecords]); // eslint-disable-line
 
   // ── Auto-populate items from vendorDeptOrders when PO first selected ─────
+  // NOTE: Only populates the item list in the form. No issue is created/saved.
   useEffect(() => {
     const poNo = newIssue.materialPurchasePoNo;
     if (!poNo || newIssue.items.length > 0) return;
@@ -367,50 +370,9 @@ const VendorIssueModule: React.FC = () => {
     setNewIssue(prev => ({ ...prev, items, date: prev.date || new Date().toISOString().slice(0, 10) }));
   }, [newIssue.materialPurchasePoNo, newIssue.items.length, getDeptOrder]);
 
-  // ── Auto-select latest PO if none set ───────────────────────────────────
-  useEffect(() => {
-    if (newIssue.materialPurchasePoNo || !vendorDeptOrders.length) return;
-    const latest = vendorDeptOrders[vendorDeptOrders.length - 1];
-    if (latest?.materialPurchasePoNo) setNewIssue(prev => ({ ...prev, materialPurchasePoNo: latest.materialPurchasePoNo }));
-  }, [vendorDeptOrders]); // eslint-disable-line
-
-  // ── Auto-import new POs from purchaseOrders ──────────────────────────────
-  useEffect(() => {
-    if (!purchaseOrders.length || !userUid) return;
-    const existingPOs = new Set(issues.map(i => i.materialPurchasePoNo));
-    const grouped: Record<string, any[]> = {};
-    purchaseOrders.forEach((e: any) => { if (!e.poNo) return; (grouped[e.poNo] = grouped[e.poNo] || []).push(e); });
-
-    const toAdd: VendorIssue[] = [];
-    Object.entries(grouped).forEach(([poNo, group]) => {
-      if (existingPOs.has(poNo)) return;
-      const dept = getDeptOrder(poNo);
-      const fields = resolveIssueFields(poNo);
-      const dcNo = fields.dcNo || getNextDCNo([...issues, ...toAdd]);
-      const items = group.map((item: any) => {
-        let qty = 0;
-        if (dept?.items) {
-          const di = dept.items.find((d: any) =>
-            String(d.itemCode || '').trim() === String(item.itemCode || '').trim() ||
-            String(d.itemName || '').trim() === String(item.itemName || item.model || '').trim()
-          );
-          if (di && typeof di.plannedQty === 'number' && di.plannedQty > 0) qty = di.plannedQty;
-        }
-        if (!qty) qty = Number(item.plannedQty || item.purchaseQty || item.originalIndentQty || item.poQty || item.qty || 0);
-        return { itemName: item.itemName || item.model || '', itemCode: item.itemCode || '', qty, indentBy: item.indentBy || '', inStock: 0, indentClosed: false };
-      });
-      // Skip if all qty=0 — sync effect will fill later
-      if (items.every(it => !it.qty)) return;
-      toAdd.push({ date: group[0]?.orderPlaceDate || new Date().toISOString().slice(0, 10), materialPurchasePoNo: poNo, ...fields, dcNo, issueNo: getNextIssueNo([...issues, ...toAdd]), items });
-    });
-
-    if (!toAdd.length) return;
-    const combined = deduplicate([...issues, ...toAdd]);
-    setIssues(combined);
-    Promise.all(toAdd.map(iss => addVendorIssue(userUid, iss))).catch(() => {});
-  }, [purchaseOrders, userUid]); // eslint-disable-line
-
-  // ── Sync empty fields into existing issues ───────────────────────────────
+  // ── Sync empty fields into EXISTING issues (patch only, never creates) ────
+  // This runs when lookup data loads and fills in missing batchNo, oaNo,
+  // vendorName, vendorBatchNo, and zero-qty items on records already in Firestore.
   useEffect(() => {
     if (!issues.length || (!vendorDeptOrders.length && !psirData.length)) return;
     let changed = false;
@@ -520,6 +482,9 @@ const VendorIssueModule: React.FC = () => {
     setItemInput({ ...BLANK_ITEM });
   }, [itemInput, editItemIdx, toast]);
 
+  // ── MANUAL SAVE ONLY ─────────────────────────────────────────────────────
+  // Issues are ONLY written to Firestore here, when the user explicitly clicks
+  // "+ Add Issue". No useEffect auto-creates issues anymore.
   const handleAddIssue = useCallback(async () => {
     if (!newIssue.date || !newIssue.materialPurchasePoNo || !newIssue.items.length) {
       toast('Fill Date, PO No and add at least one item', 'e'); return;
@@ -530,7 +495,10 @@ const VendorIssueModule: React.FC = () => {
     const combined = deduplicate([...issues, toSave]);
     setIssues(combined);
     const last = combined[combined.length - 1];
-    if (userUid && last && !last.id) { try { await addVendorIssue(userUid, last); } catch { toast('Saved locally — cloud sync failed', 'i'); } }
+    if (userUid && last && !last.id) {
+      try { await addVendorIssue(userUid, last); }
+      catch { toast('Saved locally — cloud sync failed', 'i'); }
+    }
     toast('Issue saved ✓', 's');
     clearForm();
   }, [newIssue, issues, getDeptOrder, userUid, clearForm, toast]);
@@ -603,7 +571,6 @@ const VendorIssueModule: React.FC = () => {
 
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
             <div className="vim-toolbar">
-              {/* Filter toggle */}
               <button
                 className={`vim-btn vim-btn-sm ${activeFilters > 0 ? 'vim-btn-indigo' : 'vim-btn-ghost'}`}
                 style={{ position: 'relative' }}
@@ -620,14 +587,12 @@ const VendorIssueModule: React.FC = () => {
               <span className="vim-rowcount">{filtered.length === flatRows.length ? `${flatRows.length} rows` : `${filtered.length} / ${flatRows.length} rows`}</span>
               <div className="vim-divider-sm" />
 
-              {/* Export — same row as filter */}
               <button className="vim-btn vim-btn-sm vim-btn-success" onClick={() => exportCSV(filtered as any)} title={`Export ${filtered.length} rows as CSV`}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                 Export CSV
               </button>
             </div>
 
-            {/* Active chips */}
             {activeFilters > 0 && (
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center' }}>
                 {fSearch && <span className="vim-chip">🔍 "{fSearch}" <span className="vim-chip-x" onClick={() => setFSearch('')}>×</span></span>}
@@ -699,7 +664,6 @@ const VendorIssueModule: React.FC = () => {
         {/* ── Add / Edit panel ──────────────────────────────────────── */}
         <div ref={editRef} className={`vim-card ${isEditing ? 'vim-card-edit' : ''}`} style={{ marginBottom: 20 }}>
 
-          {/* Panel header */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             padding: '14px 22px', borderBottom: '1px solid #f0f1f5',
@@ -732,7 +696,6 @@ const VendorIssueModule: React.FC = () => {
                   value={newIssue.date} onChange={e => setNewIssue(p => ({ ...p, date: e.target.value }))} />
               </Field>
 
-              {/* Auto-filled meta */}
               {newIssue.oaNo && <span className="vim-pobar-meta">OA: <strong>{newIssue.oaNo}</strong></span>}
               {newIssue.batchNo && <span className="vim-pobar-meta">Batch: <strong>{newIssue.batchNo}</strong></span>}
               {newIssue.issueNo && <span className="vim-pobar-meta">Issue: <strong style={{ color: '#4f46e5' }}>{newIssue.issueNo}</strong></span>}
@@ -758,7 +721,6 @@ const VendorIssueModule: React.FC = () => {
                 {editItemIdx !== null ? '✏ Edit Item' : '+ Add Item'}
               </div>
 
-              {/* Row 1: identity */}
               <div style={{ display: 'grid', gridTemplateColumns: '2.5fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
                 <Field label="Item Name">
                   {itemNames.length > 0 ? (
@@ -795,7 +757,6 @@ const VendorIssueModule: React.FC = () => {
                 </Field>
               </div>
 
-              {/* Row 2: quantities + status */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 12 }}>
                 <Field label="Qty ✱">
                   <NumInput value={itemInput.qty} onChange={n => setItemInput(p => ({ ...p, qty: n }))} />
@@ -814,7 +775,6 @@ const VendorIssueModule: React.FC = () => {
                 </Field>
               </div>
 
-              {/* Actions */}
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="vim-btn vim-btn-primary" onClick={handleSaveItem}>
                   {editItemIdx !== null ? '✓ Update Item' : '+ Add Item'}
@@ -862,7 +822,7 @@ const VendorIssueModule: React.FC = () => {
               </div>
             )}
 
-            {/* Save issue */}
+            {/* Save issue — only user action creates a record */}
             <div style={{ display: 'flex', gap: 10 }}>
               <button className={`vim-btn ${isEditing ? 'vim-btn-primary' : 'vim-btn-success'}`} style={{ minWidth: 160 }}
                 onClick={isEditing ? handleUpdateIssue : handleAddIssue}>
