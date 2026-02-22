@@ -1,243 +1,373 @@
-
-
-import PSIRModule from './modules/PSIRModule';
-import VSIRModule from './modules/VSIRModule';
-import StockModule from './modules/StockModule';
-import ItemMasterModule from './modules/ItemMasterModule';
-
-import React from 'react';
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 
 import LoginPage from './LoginPage';
 import SyncStatus from './components/SyncStatus';
+import { ErrorBoundary } from './components/ErrorBoundary';
+
 import IndentModule from './modules/IndentModule';
 import PurchaseModule from './modules/PurchaseModule';
 import VendorDeptModule from './modules/VendorDeptModule';
 import VendorIssueModule from './modules/VendorIssueModule';
 import InHouseIssueModule from './modules/InHouseIssueModule';
-import { ErrorBoundary } from './components/ErrorBoundary';
-import './App.css';
+import PSIRModule from './modules/PSIRModule';
+import VSIRModule from './modules/VSIRModule';
+import StockModule from './modules/StockModule';
+import ItemMasterModule from './modules/ItemMasterModule';
+
 import { useUserRole } from './hooks/useUserRole';
 import { useUserDataSync } from './hooks/useUserDataSync';
-import { runDataDiagnostics } from './utils/diagnostics';
 import { hardResetAllData, verifyDataCleared, forceCleanupAllData } from './utils/firestoreServices';
 
+import './App.css';
 
+// ─── Types ────────────────────────────────────────────────────────────────────
+type ModuleKey =
+  | 'purchase' | 'indent' | 'vendorDept' | 'vendorIssue'
+  | 'inHouseIssue' | 'psir' | 'vsir' | 'stock' | 'itemMaster';
+
+const NAV_ITEMS: { key: ModuleKey; label: string; icon: string }[] = [
+  { key: 'purchase',     label: 'Purchase',       icon: '🛒' },
+  { key: 'vendorDept',   label: 'Vendor Dept',    icon: '🏭' },
+  { key: 'vendorIssue',  label: 'Vendor Issue',   icon: '📦' },
+  { key: 'inHouseIssue', label: 'In-House Issue', icon: '🔧' },
+  { key: 'indent',       label: 'Indent',         icon: '📋' },
+  { key: 'psir',         label: 'PSIR',           icon: '✅' },
+  { key: 'vsir',         label: 'VSIR',           icon: '🔍' },
+  { key: 'stock',        label: 'Stock',          icon: '📊' },
+  { key: 'itemMaster',   label: 'Item Master',    icon: '🗂️' },
+];
+
+const ICON_B64 = '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';
+
+// ─── Hard Reset ───────────────────────────────────────────────────────────────
+async function handleHardReset(uid: string) {
+  if (!window.confirm('⚠️ This will permanently delete ALL data except Item Master. Continue?')) return;
+  try {
+    await hardResetAllData(uid);
+    let verification = await verifyDataCleared(uid);
+    if (!verification.allClear) {
+      await forceCleanupAllData(uid);
+      verification = await verifyDataCleared(uid);
+    }
+    if (verification.allClear) {
+      alert('✅ All data deleted successfully. Refreshing…');
+    } else {
+      const remaining = Object.entries(verification.results)
+        .map(([k, v]) => `  ${k}: ${v}`).join('\n');
+      alert(`⚠️ Some data could not be deleted:\n${remaining}\n\nRefreshing anyway…`);
+    }
+    window.location.reload();
+  } catch (err) {
+    console.error('[App] Hard reset failed:', err);
+    alert('❌ Hard reset failed. Check console for details.');
+  }
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
-  const [activeModule, setActiveModule] = useState<'sales' | 'dc' | 'acuInventory' | 'acuInventoryDashboard' | 'purchase' | 'salesDashboard' | 'debitNote' | 'indent' | 'vendorDept' | 'vendorIssue' | 'inHouseIssue' | 'psir' | 'vsir' | 'stock' | 'itemMaster'>('purchase');
+  const [activeModule, setActiveModule] = useState<ModuleKey>('purchase');
   const [user, setUser] = useState<any>(null);
-  // Hook to fetch and create role/profile
-  const { userProfile: _userProfile } = useUserRole(user);
-  // Hook to sync user data with Firestore (on login)
+
+  useUserRole(user);
   useUserDataSync(user);
 
-  // Expose diagnostics function to window for console debugging
-  useEffect(() => {
-    (window as any).AcuDiagnostics = {
-      runDiagnostics: runDataDiagnostics,
-      help: () => {
-        console.info('Available diagnostics commands:');
-        console.info('  AcuDiagnostics.runDiagnostics() - Check all collections for data');
-        console.info('Usage: AcuDiagnostics.runDiagnostics()');
-      },
-    };
-    console.info('[App] Diagnostics available - type: AcuDiagnostics.runDiagnostics()');
-  }, []);
+  if (!user) return <LoginPage onLogin={setUser} />;
 
-  // Build modules with user prop
-  const modulesWithUser: Record<string, React.ReactElement> = {
-    purchase: <PurchaseModule user={user} />,
-    indent: <IndentModule user={user} />,
-    vendorDept: <VendorDeptModule />,
-    vendorIssue: <VendorIssueModule />,
-    inHouseIssue: <InHouseIssueModule />,
-    psir: <PSIRModule />,
-    vsir: <VSIRModule />,
-    stock: <StockModule />,
-    itemMaster: <ItemMasterModule />,
+  const renderModule = () => {
+    switch (activeModule) {
+      case 'purchase':     return <PurchaseModule user={user} />;
+      case 'indent':       return <IndentModule user={user} />;
+      case 'vendorDept':   return <VendorDeptModule />;
+      case 'vendorIssue':  return <VendorIssueModule />;
+      case 'inHouseIssue': return <InHouseIssueModule />;
+      case 'psir':         return <PSIRModule />;
+      case 'vsir':         return <VSIRModule />;
+      case 'stock':        return <StockModule />;
+      case 'itemMaster':   return <ItemMasterModule />;
+    }
   };
 
-  if (!user) {
-    return <LoginPage onLogin={setUser} />;
-  }
+  const activeLabel = NAV_ITEMS.find(n => n.key === activeModule)?.label ?? '';
 
   return (
-    <div className="erp-app" style={{ fontFamily: 'Segoe UI, Arial, sans-serif', background: '#f6f8fa', minHeight: '100vh' }}>
-      <header style={{ background: '#1a237e', color: '#fff', padding: '20px 32px 8px 32px', boxShadow: '0 2px 8px #0001' }}>
-        <h1 style={{ margin: 0, fontSize: 28, letterSpacing: 1, textAlign: 'center' }}>Airtech Inventory ERP System</h1>
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 10 }}>
-          <span style={{ fontWeight: 500, fontSize: 16 }}>{user.email}</span>
-          <div style={{ marginLeft: 8 }}><SyncStatus /></div>
-          <button onClick={async () => {
-            if (confirm('⚠️ WARNING: This will delete ALL data except ItemMaster. Are you sure?')) {
-              try {
-                const resetResult = await hardResetAllData(user.uid);
-                console.log('[App] Hard reset result:', resetResult);
-                
-                // Verify deletion
-                let verifyResult = await verifyDataCleared(user.uid);
-                console.log('[App] Verification result:', verifyResult);
-                
-                // If data still exists, force cleanup
-                if (!verifyResult.allClear) {
-                  console.warn('[App] Data still exists after hard reset, attempting force cleanup...');
-                  await forceCleanupAllData(user.uid);
-                  
-                  // Verify again after force cleanup
-                  console.log('[App] Verifying again after force cleanup...');
-                  verifyResult = await verifyDataCleared(user.uid);
-                  console.log('[App] Second verification result:', verifyResult);
-                }
-                
-                if (verifyResult.allClear) {
-                  alert('✅ All data successfully deleted! All collections verified empty.\n\nRefreshing page...');
-                } else {
-                  alert(`⚠️ WARNING: Some data could not be deleted:\n${Object.entries(verifyResult.results).map(([k, v]) => `${k}: ${v}`).join('\n')}\n\nPlease check browser console for details.\n\nRefreshing page anyway...`);
-                }
-                
-                window.location.reload();
-              } catch (err) {
-                alert('❌ Hard reset failed. Check console for details.');
-                console.error('Hard reset error:', err);
-              }
-            }
-          }} style={{ background: '#d32f2f', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 14px', fontWeight: 500, cursor: 'pointer', fontSize: 14 }}>Hard Reset</button>
-          <button onClick={() => setUser(null)} style={{ background: '#fff', color: '#1a237e', border: 'none', borderRadius: 4, padding: '6px 14px', fontWeight: 500, cursor: 'pointer' }}>Logout</button>
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Inter:wght@300;400;500;600;700&display=swap');
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; }
+
+        .erp-app {
+          font-family: 'Inter', system-ui, sans-serif;
+          background: #F0F2F8;
+          height: 100vh;
+          display: flex;
+          flex-direction: column;
+          -webkit-font-smoothing: antialiased;
+          overflow: hidden;
+        }
+
+        /* ── Header ── */
+        .erp-header {
+          flex-shrink: 0;
+          position: relative;
+          z-index: 200;
+          background: linear-gradient(90deg, #071525 0%, #0f2540 50%, #071525 100%);
+          border-bottom: 1px solid rgba(21,101,192,0.3);
+          box-shadow: 0 2px 20px rgba(0,0,0,0.35), 0 0 40px rgba(21,101,192,0.08);
+          padding: 0 24px;
+          height: 64px;
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 16px;
+        }
+
+        /* shimmer top line */
+        .erp-header::before {
+          content: '';
+          position: absolute; top: 0; left: 0; right: 0; height: 2px;
+          background: linear-gradient(90deg, #0d47a1, #1565C0, #42a5f5, #1565C0, #0d47a1);
+          background-size: 200% 100%;
+          animation: headerShimmer 3s linear infinite;
+        }
+
+        .erp-brand {
+          display: flex; align-items: center; gap: 12px; text-decoration: none;
+          flex-shrink: 0;
+        }
+        .erp-brand-icon {
+          width: 38px; height: 38px; border-radius: 10px;
+          background: linear-gradient(160deg, #fff 0%, #eef4ff 100%);
+          display: flex; align-items: center; justify-content: center;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 1px rgba(21,101,192,0.2);
+          flex-shrink: 0;
+          position: relative; overflow: hidden;
+        }
+        .erp-brand-icon::before {
+          content: ''; position: absolute; top: 0; left: 0; right: 0; height: 50%;
+          background: linear-gradient(to bottom, rgba(255,255,255,0.6), transparent);
+          z-index: 2;
+        }
+        .erp-brand-icon img { width: 28px; height: 28px; object-fit: contain; position: relative; z-index: 1; }
+
+        .erp-brand-text { display: flex; flex-direction: column; gap: 1px; }
+        .erp-brand-name {
+          font-family: 'Cinzel', serif;
+          font-weight: 900; font-size: 15px; letter-spacing: 0.1em;
+          color: #1565C0;
+          text-shadow: 0 0 20px rgba(21,101,192,0.5);
+          line-height: 1;
+        }
+        .erp-brand-name .erp-suffix { color: #42a5f5; font-weight: 700; }
+        .erp-brand-sub {
+          font-size: 9.5px; font-weight: 400; letter-spacing: 0.14em;
+          text-transform: uppercase; color: rgba(180,210,245,0.45);
+          line-height: 1;
+        }
+
+        /* breadcrumb */
+        .erp-breadcrumb {
+          display: flex; align-items: center; gap: 6px;
+          font-size: 12px; color: rgba(180,210,245,0.5);
+          flex: 1; justify-content: center;
+        }
+        .erp-breadcrumb-sep { opacity: 0.35; }
+        .erp-breadcrumb-active {
+          color: rgba(180,210,245,0.85); font-weight: 500;
+        }
+
+        /* header right */
+        .erp-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+        .erp-user-pill {
+          display: flex; align-items: center; gap: 6px;
+          padding: 4px 10px; border-radius: 20px;
+          background: rgba(255,255,255,0.06);
+          border: 1px solid rgba(255,255,255,0.08);
+        }
+        .erp-user-dot {
+          width: 6px; height: 6px; border-radius: 50%;
+          background: #4caf50;
+          box-shadow: 0 0 6px rgba(76,175,80,0.7);
+        }
+        .erp-user-email { font-size: 12px; color: rgba(200,220,255,0.6); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .erp-hbtn {
+          display: flex; align-items: center; gap: 5px;
+          padding: 6px 12px; border-radius: 7px;
+          font-family: 'Inter', sans-serif;
+          font-size: 12px; font-weight: 500; cursor: pointer;
+          border: 1px solid transparent;
+          transition: all 0.15s;
+        }
+        .erp-hbtn-reset {
+          background: rgba(198,40,40,0.12);
+          border-color: rgba(198,40,40,0.25);
+          color: #ef9a9a;
+        }
+        .erp-hbtn-reset:hover { background: rgba(198,40,40,0.22); color: #ffcdd2; }
+        .erp-hbtn-logout {
+          background: rgba(255,255,255,0.07);
+          border-color: rgba(255,255,255,0.12);
+          color: rgba(200,220,255,0.65);
+        }
+        .erp-hbtn-logout:hover { background: rgba(255,255,255,0.12); color: #fff; }
+
+        /* ── Scrollable Body ── */
+        .erp-body {
+          flex: 1;
+          overflow-y: auto;
+          overflow-x: hidden;
+          /* Custom scrollbar */
+          scrollbar-width: thin;
+          scrollbar-color: rgba(21,101,192,0.3) transparent;
+        }
+        .erp-body::-webkit-scrollbar { width: 6px; }
+        .erp-body::-webkit-scrollbar-track { background: transparent; }
+        .erp-body::-webkit-scrollbar-thumb {
+          background: rgba(21,101,192,0.3);
+          border-radius: 3px;
+        }
+        .erp-body::-webkit-scrollbar-thumb:hover { background: rgba(21,101,192,0.5); }
+
+        /* ── Main ── */
+        .erp-main {
+          max-width: 1400px;
+          margin: 24px auto;
+          padding: 0 20px 24px;
+        }
+
+        .erp-content {
+          background: #fff;
+          border-radius: 14px;
+          border: 1px solid #E4E8F0;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04);
+          min-height: 500px;
+          overflow: visible;
+        }
+
+        /* ── Footer Nav ── */
+        .erp-footer {
+          flex-shrink: 0;
+          position: relative;
+          z-index: 200;
+          background: linear-gradient(90deg, #071525 0%, #0f2540 50%, #071525 100%);
+          border-top: 1px solid rgba(21,101,192,0.25);
+          box-shadow: 0 -4px 24px rgba(0,0,0,0.4);
+        }
+        .erp-footer::before {
+          content: '';
+          position: absolute; top: 0; left: 0; right: 0; height: 1px;
+          background: linear-gradient(90deg, transparent, rgba(21,101,192,0.5), transparent);
+        }
+
+        .erp-nav {
+          display: flex; justify-content: center; align-items: center;
+          gap: 2px; padding: 8px 12px;
+          overflow-x: auto; flex-wrap: nowrap;
+          scrollbar-width: none;
+        }
+        .erp-nav::-webkit-scrollbar { display: none; }
+
+        .erp-nav-btn {
+          display: flex; flex-direction: column; align-items: center; gap: 2px;
+          padding: 6px 14px; border-radius: 8px;
+          border: 1px solid transparent;
+          background: transparent;
+          color: rgba(255,255,255,0.5);
+          font-family: 'Inter', sans-serif;
+          font-size: 11px; font-weight: 400;
+          cursor: pointer; white-space: nowrap;
+          transition: all 0.15s; flex-shrink: 0;
+        }
+        .erp-nav-btn .nav-icon { font-size: 14px; line-height: 1; }
+        .erp-nav-btn .nav-label { line-height: 1; }
+
+        .erp-nav-btn:hover {
+          color: rgba(255,255,255,0.8);
+          background: rgba(255,255,255,0.06);
+        }
+        .erp-nav-btn.active {
+          background: rgba(21,101,192,0.18);
+          border-color: rgba(21,101,192,0.35);
+          color: #42a5f5;
+          font-weight: 600;
+          box-shadow: 0 0 12px rgba(21,101,192,0.2);
+        }
+        .erp-nav-btn.active .nav-icon { filter: drop-shadow(0 0 4px rgba(66,165,245,0.6)); }
+
+        @keyframes headerShimmer {
+          from { background-position: 200% 0; } to { background-position: -200% 0; }
+        }
+      `}</style>
+
+      <div className="erp-app">
+
+        {/* ── Header ── */}
+        <header className="erp-header">
+
+          {/* Brand */}
+          <div className="erp-brand">
+            <div className="erp-brand-icon">
+              <img src={`data:image/jpeg;base64,${ICON_B64}`} alt="Airtech" />
+            </div>
+            <div className="erp-brand-text">
+              <div className="erp-brand-name">AIRTECH&nbsp;<span className="erp-suffix">ERP</span></div>
+              <div className="erp-brand-sub">Inventory Management</div>
+            </div>
+          </div>
+
+          {/* Breadcrumb */}
+          <div className="erp-breadcrumb">
+            <span>Airtech ERP</span>
+            <span className="erp-breadcrumb-sep">›</span>
+            <span className="erp-breadcrumb-active">{activeLabel}</span>
+          </div>
+
+          {/* Right side */}
+          <div className="erp-header-right">
+            <SyncStatus />
+            <div className="erp-user-pill">
+              <div className="erp-user-dot"></div>
+              <span className="erp-user-email">{user.email}</span>
+            </div>
+            <button className="erp-hbtn erp-hbtn-reset" onClick={() => handleHardReset(user.uid)}>
+              ⚠ Reset
+            </button>
+            <button className="erp-hbtn erp-hbtn-logout" onClick={() => setUser(null)}>
+              ⏻ Logout
+            </button>
+          </div>
+        </header>
+
+        {/* ── Scrollable body between header and footer ── */}
+        <div className="erp-body">
+          <main className="erp-main">
+            <div className="erp-content">
+              <ErrorBoundary>
+                {renderModule()}
+              </ErrorBoundary>
+            </div>
+          </main>
         </div>
-      </header>
-      <main style={{ maxWidth: 1400, margin: '24px auto 120px', padding: '0 20px' }}>
-        <div style={{
-          background: '#fff',
-          borderRadius: 14,
-          border: '1px solid #E4E8F0',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04)',
-          minHeight: 500,
-          maxHeight: 'calc(100vh - 64px - 80px - 48px)',
-          overflowY: 'auto',
-          padding: 32
-        }}>
-          <ErrorBoundary>
-            {modulesWithUser[activeModule]}
-          </ErrorBoundary>
-        </div>
-      </main>
-      <footer style={{
-        position: 'fixed',
-        left: 0,
-        bottom: 0,
-        width: '100%',
-        background: '#1a237e',
-        color: '#fff',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: '12px 0',
-        boxShadow: '0 -2px 8px #0001',
-        zIndex: 100
-      }}>
-  <nav style={{ display: 'flex', gap: 24, overflowX: 'auto', whiteSpace: 'nowrap', paddingBottom: 4, maxWidth: '100vw' }}>
-          <button onClick={() => setActiveModule('purchase')} style={{
-            background: activeModule === 'purchase' ? '#3949ab' : '#fff',
-            color: activeModule === 'purchase' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>Purchase</button>
-          <button onClick={() => setActiveModule('vendorDept')} style={{
-            background: activeModule === 'vendorDept' ? '#3949ab' : '#fff',
-            color: activeModule === 'vendorDept' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>Vendor Dept</button>
-          <button onClick={() => setActiveModule('vendorIssue')} style={{
-            background: activeModule === 'vendorIssue' ? '#3949ab' : '#fff',
-            color: activeModule === 'vendorIssue' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>Vendor Issue</button>
-          <button onClick={() => setActiveModule('inHouseIssue')} style={{
-            background: activeModule === 'inHouseIssue' ? '#3949ab' : '#fff',
-            color: activeModule === 'inHouseIssue' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>In House Issue</button>
-          <button onClick={() => setActiveModule('indent')} style={{
-            background: activeModule === 'indent' ? '#3949ab' : '#fff',
-            color: activeModule === 'indent' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>Indent</button>
-          <button onClick={() => setActiveModule('psir')} style={{
-            background: activeModule === 'psir' ? '#3949ab' : '#fff',
-            color: activeModule === 'psir' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>PSIR</button>
-          <button onClick={() => setActiveModule('vsir')} style={{
-            background: activeModule === 'vsir' ? '#3949ab' : '#fff',
-            color: activeModule === 'vsir' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>VSIR</button>
-          <button onClick={() => setActiveModule('stock')} style={{
-            background: activeModule === 'stock' ? '#3949ab' : '#fff',
-            color: activeModule === 'stock' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>Stock</button>
-          <button onClick={() => setActiveModule('itemMaster')} style={{
-            background: activeModule === 'itemMaster' ? '#3949ab' : '#fff',
-            color: activeModule === 'itemMaster' ? '#fff' : '#1a237e',
-            border: 'none',
-            borderRadius: 4,
-            padding: '10px 28px',
-            fontWeight: 500,
-            fontSize: 16,
-            cursor: 'pointer',
-            transition: 'background 0.2s, color 0.2s',
-          }}>Item Master</button>
-        </nav>
-      </footer>
-    </div>
+
+        {/* ── Footer Nav ── */}
+        <footer className="erp-footer">
+          <nav className="erp-nav">
+            {NAV_ITEMS.map(({ key, label, icon }) => (
+              <button
+                key={key}
+                className={`erp-nav-btn${activeModule === key ? ' active' : ''}`}
+                onClick={() => setActiveModule(key)}
+              >
+                <span className="nav-icon">{icon}</span>
+                <span className="nav-label">{label}</span>
+              </button>
+            ))}
+          </nav>
+        </footer>
+
+      </div>
+    </>
   );
 }
 
