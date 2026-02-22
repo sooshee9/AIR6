@@ -37,8 +37,6 @@ const NAV_ITEMS: { key: ModuleKey; label: string; icon: string }[] = [
   { key: 'itemMaster',   label: 'Item Master',    icon: '🗂️' },
 ];
 
-const ICON_B64 = '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';
-
 // ─── Hard Reset ───────────────────────────────────────────────────────────────
 async function handleHardReset(uid: string) {
   if (!window.confirm('⚠️ This will permanently delete ALL data except Item Master. Continue?')) return;
@@ -121,7 +119,6 @@ function App() {
           gap: 16px;
         }
 
-        /* shimmer top line */
         .erp-header::before {
           content: '';
           position: absolute; top: 0; left: 0; right: 0; height: 2px;
@@ -136,18 +133,18 @@ function App() {
         }
         .erp-brand-icon {
           width: 38px; height: 38px; border-radius: 10px;
-          background: linear-gradient(160deg, #fff 0%, #eef4ff 100%);
+          background: linear-gradient(160deg, #1565C0 0%, #0d47a1 100%);
           display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 1px rgba(21,101,192,0.2);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 1px rgba(66,165,245,0.3);
           flex-shrink: 0;
-          position: relative; overflow: hidden;
+          font-family: 'Cinzel', Georgia, serif;
+          font-weight: 900;
+          font-size: 18px;
+          color: #fff;
+          letter-spacing: -0.02em;
+          text-shadow: 0 1px 4px rgba(0,0,0,0.4);
+          user-select: none;
         }
-        .erp-brand-icon::before {
-          content: ''; position: absolute; top: 0; left: 0; right: 0; height: 50%;
-          background: linear-gradient(to bottom, rgba(255,255,255,0.6), transparent);
-          z-index: 2;
-        }
-        .erp-brand-icon img { width: 28px; height: 28px; object-fit: contain; position: relative; z-index: 1; }
 
         .erp-brand-text { display: flex; flex-direction: column; gap: 1px; }
         .erp-brand-name {
@@ -164,18 +161,14 @@ function App() {
           line-height: 1;
         }
 
-        /* breadcrumb */
         .erp-breadcrumb {
           display: flex; align-items: center; gap: 6px;
           font-size: 12px; color: rgba(180,210,245,0.5);
           flex: 1; justify-content: center;
         }
         .erp-breadcrumb-sep { opacity: 0.35; }
-        .erp-breadcrumb-active {
-          color: rgba(180,210,245,0.85); font-weight: 500;
-        }
+        .erp-breadcrumb-active { color: rgba(180,210,245,0.85); font-weight: 500; }
 
-        /* header right */
         .erp-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
         .erp-user-pill {
@@ -189,7 +182,10 @@ function App() {
           background: #4caf50;
           box-shadow: 0 0 6px rgba(76,175,80,0.7);
         }
-        .erp-user-email { font-size: 12px; color: rgba(200,220,255,0.6); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .erp-user-email {
+          font-size: 12px; color: rgba(200,220,255,0.6);
+          max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
 
         .erp-hbtn {
           display: flex; align-items: center; gap: 5px;
@@ -217,15 +213,13 @@ function App() {
           flex: 1;
           overflow-y: auto;
           overflow-x: hidden;
-          /* Custom scrollbar */
           scrollbar-width: thin;
           scrollbar-color: rgba(21,101,192,0.3) transparent;
         }
         .erp-body::-webkit-scrollbar { width: 6px; }
         .erp-body::-webkit-scrollbar-track { background: transparent; }
         .erp-body::-webkit-scrollbar-thumb {
-          background: rgba(21,101,192,0.3);
-          border-radius: 3px;
+          background: rgba(21,101,192,0.3); border-radius: 3px;
         }
         .erp-body::-webkit-scrollbar-thumb:hover { background: rgba(21,101,192,0.5); }
 
@@ -236,6 +230,7 @@ function App() {
           padding: 0 20px 24px;
         }
 
+        /* The white card wrapper — DO NOT set overflow:hidden here */
         .erp-content {
           background: #fff;
           border-radius: 14px;
@@ -243,6 +238,14 @@ function App() {
           box-shadow: 0 1px 3px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04);
           min-height: 500px;
           overflow: visible;
+        }
+
+        /*
+         * KEY FIX: every module renders its own outer div with minHeight:'100vh'.
+         * Override that here so it doesn't create extra scroll space inside the card.
+         */
+        .erp-content > * {
+          min-height: unset !important;
         }
 
         /* ── Footer Nav ── */
@@ -262,25 +265,26 @@ function App() {
 
         .erp-nav {
           display: flex; justify-content: center; align-items: center;
-          gap: 2px; padding: 8px 12px;
+          gap: 4px; padding: 10px 16px;
           overflow-x: auto; flex-wrap: nowrap;
           scrollbar-width: none;
         }
         .erp-nav::-webkit-scrollbar { display: none; }
 
         .erp-nav-btn {
-          display: flex; flex-direction: column; align-items: center; gap: 2px;
-          padding: 6px 14px; border-radius: 8px;
+          display: flex; flex-direction: column; align-items: center; gap: 4px;
+          padding: 8px 16px; border-radius: 10px;
           border: 1px solid transparent;
           background: transparent;
-          color: rgba(255,255,255,0.5);
+          color: rgba(255,255,255,0.6);
           font-family: 'Inter', sans-serif;
-          font-size: 11px; font-weight: 400;
+          font-size: 12px; font-weight: 500;
           cursor: pointer; white-space: nowrap;
           transition: all 0.15s; flex-shrink: 0;
+          min-width: 68px;
         }
-        .erp-nav-btn .nav-icon { font-size: 14px; line-height: 1; }
-        .erp-nav-btn .nav-label { line-height: 1; }
+        .erp-nav-btn .nav-icon { font-size: 20px; line-height: 1; }
+        .erp-nav-btn .nav-label { line-height: 1; letter-spacing: 0.01em; }
 
         .erp-nav-btn:hover {
           color: rgba(255,255,255,0.8);
@@ -307,9 +311,8 @@ function App() {
 
           {/* Brand */}
           <div className="erp-brand">
-            <div className="erp-brand-icon">
-              <img src={`data:image/jpeg;base64,${ICON_B64}`} alt="Airtech" />
-            </div>
+            {/* Letter "A" icon — no broken image dependency */}
+            <div className="erp-brand-icon">A</div>
             <div className="erp-brand-text">
               <div className="erp-brand-name">AIRTECH&nbsp;<span className="erp-suffix">ERP</span></div>
               <div className="erp-brand-sub">Inventory Management</div>
