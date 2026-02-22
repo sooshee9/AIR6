@@ -161,6 +161,13 @@ const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
   const [importing,   setImporting]   = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
 
+  // ─── Filter state ──────────────────────────────────────────────────────
+  const [filterText,     setFilterText]     = useState('');
+  const [filterStatus,   setFilterStatus]   = useState('');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo,   setFilterDateTo]   = useState('');
+  const [showFilters,    setShowFilters]    = useState(false);
+
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 4000);
@@ -478,6 +485,59 @@ const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
     indentItems: openIndentItems.length + closedIndentItems.length,
   }), [entries, openIndentItems, closedIndentItems]);
 
+  // ─── Filtered entries ──────────────────────────────────────────────────
+  const filteredEntries = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    return entries.filter(e => {
+      if (filterStatus && e.indentStatus !== filterStatus) return false;
+      if (filterDateFrom && e.orderPlaceDate && e.orderPlaceDate < filterDateFrom) return false;
+      if (filterDateTo   && e.orderPlaceDate && e.orderPlaceDate > filterDateTo)   return false;
+      if (!q) return true;
+      return (
+        e.itemName.toLowerCase().includes(q)   ||
+        e.itemCode.toLowerCase().includes(q)   ||
+        e.indentNo.toLowerCase().includes(q)   ||
+        e.poNo.toLowerCase().includes(q)       ||
+        e.supplierName.toLowerCase().includes(q) ||
+        e.oaNo.toLowerCase().includes(q)       ||
+        e.grnNo.toLowerCase().includes(q)
+      );
+    });
+  }, [entries, filterText, filterStatus, filterDateFrom, filterDateTo]);
+
+  const activeFilterCount = [filterText, filterStatus, filterDateFrom, filterDateTo].filter(Boolean).length;
+
+  const clearFilters = () => { setFilterText(''); setFilterStatus(''); setFilterDateFrom(''); setFilterDateTo(''); };
+
+  // ─── Excel export (no dependencies — pure CSV via data: URI) ──────────
+  const exportToExcel = () => {
+    const cols = ['#','Item','Code','Indent No','OA No','Order Date','PO No','Supplier','Orig Qty','PO Qty','Stock','Status','Received','OK','Rejected','GRN No','Remarks'];
+    const rows = filteredEntries.map((e, i) => {
+      const { display: liveStock } = getLiveInfo(e);
+      return [
+        i + 1,
+        e.itemName, e.itemCode, e.indentNo, e.oaNo,
+        e.orderPlaceDate, e.poNo, e.supplierName,
+        e.originalIndentQty,
+        e.indentStatus === 'Open' ? Math.abs(liveStock) : 0,
+        liveStock,
+        e.indentStatus,
+        e.receivedQty, e.okQty, e.rejectedQty,
+        e.grnNo, e.remarks,
+      ].map(v => `"${String(v ?? '').replace(/"/g, '""')}"`);
+    });
+
+    const csv = [cols.map(c => `"${c}"`), ...rows].map(r => r.join(',')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel UTF-8
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `purchase-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setNotice({ type: 'success', msg: `Exported ${filteredEntries.length} rows to Excel.` });
+  };
+
   // ─── Render ────────────────────────────────────────────────────────────
   return (
     <div style={S.root}>
@@ -486,6 +546,20 @@ const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
       <div style={S.topRow}>
         <h2 style={S.title}>Purchase Orders</h2>
         <div style={S.topBtns}>
+          <button
+            onClick={() => setShowFilters(p => !p)}
+            style={{ ...S.btnOutline, position: 'relative' as const }}
+          >
+            {showFilters ? '✕ Filters' : '⊟ Filters'}
+            {activeFilterCount > 0 && (
+              <span style={{ position: 'absolute', top: -6, right: -6, background: '#2563eb', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 10, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+          <button onClick={exportToExcel} style={S.btnOutline} title="Export visible rows to Excel/CSV">
+            ↓ Export
+          </button>
           <button onClick={handleImportIndents} disabled={importing} style={{ ...S.btnOutline, ...(importing ? { opacity: 0.6, cursor: 'not-allowed' } : {}) }}>
             {importing ? 'Syncing…' : '↓ Sync from Indents'}
           </button>
@@ -494,6 +568,46 @@ const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
           </button>
         </div>
       </div>
+
+      {/* Filter bar */}
+      {showFilters && (
+        <div style={{ background: '#f0f4ff', border: '1px solid #c7d2fe', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 10, alignItems: 'end' }}>
+            <div>
+              <label style={S.label}>Search</label>
+              <input
+                placeholder="Item, PO, Supplier, OA…"
+                value={filterText}
+                onChange={e => setFilterText(e.target.value)}
+                style={{ ...S.input, background: '#fff' }}
+              />
+            </div>
+            <div>
+              <label style={S.label}>Status</label>
+              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} style={{ ...S.select, background: '#fff' }}>
+                <option value="">All statuses</option>
+                {INDENT_STATUS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={S.label}>Order Date From</label>
+              <input type="date" value={filterDateFrom} onChange={e => setFilterDateFrom(e.target.value)} style={{ ...S.input, background: '#fff' }} />
+            </div>
+            <div>
+              <label style={S.label}>Order Date To</label>
+              <input type="date" value={filterDateTo} onChange={e => setFilterDateTo(e.target.value)} style={{ ...S.input, background: '#fff' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              {activeFilterCount > 0 && (
+                <button onClick={clearFilters} style={{ ...S.btnOutline, fontSize: 12, padding: '7px 12px' }}>Clear</button>
+              )}
+              <span style={{ fontSize: 12, color: '#6b7280', alignSelf: 'center' }}>
+                {filteredEntries.length} of {entries.length} rows
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Notice */}
       {notice && <div style={S.notice(notice.type)}>{notice.msg}</div>}
@@ -576,9 +690,9 @@ const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
               <colgroup>
                 <col style={{ width: 36  }} />  {/* # */}
                 <col style={{ width: 120 }} />  {/* Item */}
-                <col style={{ width: 80  }} />  {/* Code */}
+                <col style={{ width: 76  }} />  {/* Code */}
                 <col style={{ width: 90  }} />  {/* Indent No */}
-                <col style={{ width: 70  }} />  {/* OA No */}
+                <col style={{ width: 100 }} />  {/* OA No — wider so full value shows */}
                 <col style={{ width: 96  }} />  {/* Order Date */}
                 <col style={{ width: 90  }} />  {/* PO No */}
                 <col style={{ width: 110 }} />  {/* Supplier */}
@@ -629,47 +743,48 @@ const PurchaseModule: React.FC<PurchaseModuleProps> = ({ user }) => {
               </thead>
 
               <tbody>
-                {entries.map((e, i) => {
+                {filteredEntries.length === 0 ? (
+                  <tr>
+                    <td colSpan={18} style={{ ...S.td, textAlign: 'center', padding: '32px', color: '#9ca3af' }}>
+                      No entries match the current filters.{' '}
+                      <button onClick={clearFilters} style={{ background: 'none', border: 'none', color: '#2563eb', cursor: 'pointer', fontSize: 13, textDecoration: 'underline', padding: 0 }}>Clear filters</button>
+                    </td>
+                  </tr>
+                ) : filteredEntries.map((e, i) => {
                   const { display: liveStock, isShort } = getLiveInfo(e);
-                  const isEditing = i === editIndex;
-                  const row: React.CSSProperties = { background: isEditing ? '#eff6ff' : i % 2 === 0 ? '#fff' : '#fafafa' };
-                  const tdR: React.CSSProperties = { ...S.td, textAlign: 'right' };
-                  const tdMono: React.CSSProperties = { ...S.td, fontFamily: 'ui-monospace, monospace', fontSize: 12 };
+                  const isEditing   = entries.indexOf(e) === editIndex;
+                  const row: React.CSSProperties      = { background: isEditing ? '#eff6ff' : i % 2 === 0 ? '#fff' : '#fafafa' };
+                  const tdR: React.CSSProperties      = { ...S.td, textAlign: 'right' };
+                  const tdMono: React.CSSProperties   = { ...S.td, fontFamily: 'ui-monospace, monospace', fontSize: 12 };
                   const divBorder: React.CSSProperties = { borderLeft: '2px solid #f1f3f7' };
 
                   return (
                     <tr key={i} style={row}>
-                      {/* # */}
                       <td style={{ ...S.td, color: '#9ca3af', fontSize: 11, textAlign: 'center' }}>{i + 1}</td>
 
-                      {/* Item info */}
                       <td style={{ ...S.td, fontWeight: 600, ...divBorder, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.itemName}>{e.itemName || '—'}</td>
                       <td style={{ ...tdMono, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.itemCode || '—'}</td>
-                      <td style={{ ...tdMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.indentNo || '—'}</td>
-                      <td style={{ ...S.td, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.oaNo || '—'}</td>
+                      <td style={{ ...tdMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.indentNo}>{e.indentNo || '—'}</td>
+                      <td style={{ ...S.td, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.oaNo}>{e.oaNo || '—'}</td>
 
-                      {/* Order info */}
                       <td style={{ ...S.td, ...divBorder, color: e.orderPlaceDate ? '#374151' : '#d1d5db', whiteSpace: 'nowrap' }}>{e.orderPlaceDate || 'Not set'}</td>
                       <td style={{ ...S.td, fontWeight: e.poNo ? 600 : 400, color: e.poNo ? '#374151' : '#ef4444', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.poNo || 'Not set'}</td>
                       <td style={{ ...S.td, color: e.supplierName ? '#374151' : '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.supplierName}>{e.supplierName || 'Not set'}</td>
 
-                      {/* Qty / stock */}
                       <td style={{ ...tdR, ...divBorder }}>{e.originalIndentQty || '—'}</td>
                       <td style={tdR}>{e.indentStatus === 'Open' ? Math.abs(liveStock) : 0}</td>
                       <td style={{ ...S.td, textAlign: 'center' }}><StockBadge value={liveStock} isShort={isShort} /></td>
                       <td style={S.td}><StatusBadge status={e.indentStatus} /></td>
 
-                      {/* Receipt */}
                       <td style={{ ...tdR, ...divBorder }}>{e.receivedQty}</td>
                       <td style={tdR}>{e.okQty}</td>
                       <td style={tdR}>{e.rejectedQty}</td>
 
-                      {/* Misc */}
                       <td style={{ ...tdMono, ...divBorder, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.grnNo || '—'}</td>
                       <td style={{ ...S.td, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, color: '#6b7280' }} title={e.remarks || ''}>{e.remarks || '—'}</td>
                       <td style={{ ...S.td, textAlign: 'center', whiteSpace: 'nowrap' }}>
-                        <button onClick={() => handleEdit(i)}   style={{ ...S.btnSm('#2563eb'), marginRight: 4 }}>Edit</button>
-                        <button onClick={() => handleDelete(i)} style={S.btnSm('#ef4444')}>Del</button>
+                        <button onClick={() => handleEdit(entries.indexOf(e))}   style={{ ...S.btnSm('#2563eb'), marginRight: 4 }}>Edit</button>
+                        <button onClick={() => handleDelete(entries.indexOf(e))} style={S.btnSm('#ef4444')}>Del</button>
                       </td>
                     </tr>
                   );
