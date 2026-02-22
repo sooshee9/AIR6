@@ -191,7 +191,15 @@ const S = {
     fontSize: 14,
     color: '#1A1F36',
     borderBottom: '1px solid #F1F3F9',
-    maxWidth: 160,
+    whiteSpace: 'nowrap' as const,
+  },
+
+  tdClip: {
+    padding: '10px 12px',
+    fontSize: 14,
+    color: '#1A1F36',
+    borderBottom: '1px solid #F1F3F9',
+    maxWidth: 200,
     overflow: 'hidden' as const,
     textOverflow: 'ellipsis' as const,
     whiteSpace: 'nowrap' as const,
@@ -203,6 +211,7 @@ const S = {
     color: '#1A1F36',
     borderBottom: '1px solid #F1F3F9',
     textAlign: 'right' as const,
+    whiteSpace: 'nowrap' as const,
     fontVariantNumeric: 'tabular-nums',
   } as React.CSSProperties,
 };
@@ -546,7 +555,8 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
 
     replaceFirestoreCollection(uid, 'indentData', updated).then(() => {
       showToast(`Indent ${indentNo} saved successfully`, 'success');
-    }).catch(() => {
+    }).catch((err) => {
+      console.warn('Failed to save indent:', err);
       showToast('Failed to save indent. Please try again.', 'error');
     });
 
@@ -907,25 +917,16 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                 </div>
 
                 <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${S.border}` }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                    <colgroup>
-                      <col style={{ width: '28%' }} />
-                      <col style={{ width: '18%' }} />
-                      <col style={{ width: '10%' }} />
-                      <col style={{ width: '12%' }} />
-                      <col style={{ width: '14%' }} />
-                      <col style={{ width: '10%' }} />
-                      <col style={{ width: '8%' }} />
-                    </colgroup>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
                     <thead>
                       <tr>
-                        <th style={S.th}>Item Name</th>
-                        <th style={S.th}>Item Code</th>
-                        <th style={S.thRight}>Qty</th>
-                        <th style={S.thRight}>Available</th>
-                        <th style={S.thRight}>Remaining</th>
-                        <th style={{ ...S.th, textAlign: 'center' }}>Status</th>
-                        <th style={{ ...S.th, textAlign: 'center' }}>Actions</th>
+                        <th style={{ ...S.th, minWidth: 180 }}>Item Name</th>
+                        <th style={{ ...S.th, minWidth: 110 }}>Item Code</th>
+                        <th style={{ ...S.thRight, minWidth: 60 }}>Qty</th>
+                        <th style={{ ...S.thRight, minWidth: 80 }}>Available</th>
+                        <th style={{ ...S.thRight, minWidth: 90 }}>Remaining</th>
+                        <th style={{ ...S.th, textAlign: 'center', minWidth: 80 }}>Status</th>
+                        <th style={{ ...S.th, textAlign: 'center', minWidth: 100 }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -939,8 +940,8 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
 
                         return (
                           <tr key={idx} className="im-row" style={{ background: insufficient ? '#FFF9F9' : 'inherit' }}>
-                            <td style={S.td} title={item.model}>{item.model}</td>
-                            <td style={S.td} title={item.itemCode}>{item.itemCode}</td>
+                            <td style={S.tdClip} title={item.model}>{item.model}</td>
+                            <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 13 }}>{item.itemCode}</td>
                             <td style={{ ...S.tdRight, fontWeight: 600 }}>{item.qty}</td>
                             <td style={{ ...S.tdRight, color: insufficient ? S.danger : S.success, fontWeight: 600 }}>{avail}</td>
                             <td style={{ ...S.tdRight, color: remaining >= 0 ? S.success : S.danger, fontWeight: 600 }}>{remaining}</td>
@@ -1125,41 +1126,24 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
 
             {/* Records table */}
             <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${S.border}` }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-                <colgroup>
-                  <col style={{ width: '7%' }} />   {/* Date */}
-                  <col style={{ width: '9%' }} />   {/* Indent No */}
-                  <col style={{ width: '18%' }} />  {/* Item Name */}
-                  <col style={{ width: '10%' }} />  {/* Item Code */}
-                  <col style={{ width: '5%' }} />   {/* Qty */}
-                  <col style={{ width: '5%' }} />   {/* By */}
-                  <col style={{ width: '8%' }} />   {/* OA */}
-                  <col style={{ width: '2px' }} />  {/* divider */}
-                  <col style={{ width: '7%' }} />   {/* Total Stock */}
-                  <col style={{ width: '7%' }} />   {/* Prev Indents */}
-                  <col style={{ width: '6%' }} />   {/* PO Qty */}
-                  <col style={{ width: '2px' }} />  {/* divider */}
-                  <col style={{ width: '8%' }} />   {/* Available */}
-                  <col style={{ width: '7%' }} />   {/* Status */}
-                  <col style={{ width: '5%' }} />   {/* Actions */}
-                </colgroup>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
                 <thead>
                   <tr>
-                    <th style={S.th}>Date</th>
-                    <th style={S.th}>Indent No</th>
-                    <th style={S.th}>Item Name</th>
-                    <th style={S.th}>Item Code</th>
-                    <th style={S.thRight}>Qty</th>
-                    <th style={S.th}>By</th>
-                    <th style={S.th}>OA No</th>
-                    <th style={{ ...S.th, padding: 0, background: S.borderStrong }} />
-                    <th style={S.thRight}>Total Stock</th>
-                    <th style={S.thRight}>Prev Qty</th>
-                    <th style={S.thRight}>PO Qty</th>
-                    <th style={{ ...S.th, padding: 0, background: S.borderStrong }} />
-                    <th style={S.thRight}>Available</th>
-                    <th style={{ ...S.th, textAlign: 'center' }}>Status</th>
-                    <th style={{ ...S.th, textAlign: 'center' }}>Del</th>
+                    <th style={{ ...S.th, minWidth: 95 }}>Date</th>
+                    <th style={{ ...S.th, minWidth: 115 }}>Indent No</th>
+                    <th style={{ ...S.th, minWidth: 180 }}>Item Name</th>
+                    <th style={{ ...S.th, minWidth: 110 }}>Item Code</th>
+                    <th style={{ ...S.thRight, minWidth: 55 }}>Qty</th>
+                    <th style={{ ...S.th, minWidth: 52 }}>By</th>
+                    <th style={{ ...S.th, minWidth: 90 }}>OA No</th>
+                    <th style={{ width: 2, padding: 0, background: S.borderStrong, borderBottom: `2px solid ${S.borderStrong}` }} />
+                    <th style={{ ...S.thRight, minWidth: 95 }}>Total Stock</th>
+                    <th style={{ ...S.thRight, minWidth: 80 }}>Prev Qty</th>
+                    <th style={{ ...S.thRight, minWidth: 68 }}>PO Qty</th>
+                    <th style={{ width: 2, padding: 0, background: S.borderStrong, borderBottom: `2px solid ${S.borderStrong}` }} />
+                    <th style={{ ...S.thRight, minWidth: 95 }}>Available</th>
+                    <th style={{ ...S.th, textAlign: 'center', minWidth: 94 }}>Status</th>
+                    <th style={{ ...S.th, textAlign: 'center', minWidth: 48 }}>Del</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1184,12 +1168,12 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                     return (
                       <tr key={rowIdx} className="im-row" style={{ background: rowIdx % 2 === 1 ? S.bg : S.surface }}>
                         <td style={S.td}>{r.date}</td>
-                        <td style={{ ...S.td, fontWeight: 600, color: S.accent }}>{r.indentNo}</td>
-                        <td style={S.td} title={r.model}>{r.model}</td>
-                        <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 13 }} title={r.itemCode}>{r.itemCode}</td>
+                        <td style={{ ...S.td, fontWeight: 600, color: S.accent, whiteSpace: 'nowrap' }}>{r.indentNo}</td>
+                        <td style={S.tdClip} title={r.model}>{r.model}</td>
+                        <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 13 }}>{r.itemCode}</td>
                         <td style={{ ...S.tdRight, fontWeight: 700 }}>{r.qty}</td>
                         <td style={S.td}>{r.indentBy}</td>
-                        <td style={S.td} title={r.oaNo}>{r.oaNo}</td>
+                        <td style={S.td}>{r.oaNo}</td>
                         <td style={{ padding: 0, background: S.border, width: 2 }} />
                         <td style={{ ...S.tdRight, color: S.textSecondary }}>{r.totalStock}</td>
                         <td style={{ ...S.tdRight, color: S.textSecondary }}>{r.previousIndentsQty}</td>
@@ -1204,16 +1188,16 @@ const IndentModule: React.FC<IndentModuleProps> = ({ user }) => {
                             fontSize: 13,
                             background: availBg,
                             color: availBadgeColor,
-                            minWidth: 36,
+                            minWidth: 44,
                             textAlign: 'right',
                           }}>
                             {r.availableForThisIndent}
                           </span>
                         </td>
-                        <td style={{ ...S.td, textAlign: 'center', overflow: 'visible' }}>
+                        <td style={{ ...S.td, textAlign: 'center' }}>
                           <StatusBadge closed={r.isClosed} />
                         </td>
-                        <td style={{ ...S.td, textAlign: 'center', overflow: 'visible' }}>
+                        <td style={{ ...S.td, textAlign: 'center' }}>
                           <button
                             className="im-btn im-danger-btn"
                             style={{ ...S.btnDanger, padding: '3px 8px' }}
