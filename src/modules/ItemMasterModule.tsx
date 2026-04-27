@@ -195,6 +195,8 @@ const ItemMasterModule: React.FC = () => {
         .im-input:focus { border-color: #3B5BDB !important; box-shadow: 0 0 0 3px rgba(59,91,219,0.12); }
         .im-ghost:hover { background: #F7F8FC !important; border-color: #CBD2E0 !important; }
         * { box-sizing: border-box; }
+        /* tables use content-box so padding doesn’t distort column widths */
+        table, th, td { box-sizing: content-box; }
       `}</style>
 
       <ToastContainer toasts={toasts} />
@@ -309,13 +311,14 @@ const ItemMasterModule: React.FC = () => {
             )}
 
             <div style={{ overflowX: 'auto', borderRadius: 8, border: `1px solid ${S.border}` }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+                {/* let the browser size columns naturally; minWidth on headers keeps them from collapsing */}
                 <thead>
                   <tr>
                     <th style={{ ...S.th, minWidth: 32, textAlign: 'center' }}>#</th>
                     <th style={{ ...S.th, minWidth: 200 }}>Item Name</th>
                     <th style={{ ...S.th, minWidth: 130 }}>Item Code</th>
-                    <th style={{ ...S.th, textAlign: 'center', minWidth: 100 }}>Actions</th>
+                    <th style={{ ...S.th, minWidth: 100, textAlign: 'center' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -329,10 +332,10 @@ const ItemMasterModule: React.FC = () => {
                     const origIdx = records.indexOf(rec);
                     return (
                       <tr key={rec.id || rowIdx} className="im-row" style={{ background: rowIdx % 2 === 1 ? S.bg : S.surface }}>
-                        <td style={{ ...S.td, textAlign: 'center', color: S.textMuted, fontSize: 12 }}>{rowIdx + 1}</td>
-                        <td style={{ ...S.td, fontWeight: 500 }}>{rec.itemName}</td>
-                        <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 13, color: S.accent, fontWeight: 600 }}>{rec.itemCode}</td>
-                        <td style={{ ...S.td, textAlign: 'center' }}>
+                        <td style={{ ...S.td, minWidth: 32, textAlign: 'center', color: S.textMuted, fontSize: 12 }}>{rowIdx + 1}</td>
+                        <td style={{ ...S.td, minWidth: 200, fontWeight: 500 }}>{rec.itemName}</td>
+                        <td style={{ ...S.td, minWidth: 130, fontFamily: 'monospace', fontSize: 13, color: S.accent, fontWeight: 600 }}>{rec.itemCode}</td>
+                        <td style={{ ...S.td, minWidth: 100, textAlign: 'center' }}>
                           <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
                             <button className="im-btn" style={S.btnEdit} onClick={() => handleEdit(origIdx)}>Edit</button>
                             <button className="im-btn" style={{ ...S.btnDanger, padding: '3px 8px' }} onClick={() => handleDelete(origIdx)}>✕</button>

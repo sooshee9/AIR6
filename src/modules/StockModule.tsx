@@ -98,37 +98,6 @@ function StatCard({label,value,sub,color}:{label:string;value:string|number;sub?
   );
 }
 
-function CalligraphicHeader({synced}:{synced:boolean}) {
-  return (
-    <div style={{background:'linear-gradient(135deg,#1a1200 0%,#2d1f00 40%,#1a1200 100%)',borderRadius:16,padding:'28px 36px',marginBottom:28,position:'relative',overflow:'hidden',boxShadow:'0 8px 32px rgba(0,0,0,0.35),inset 0 1px 0 rgba(212,175,55,0.3)'}}>
-      <div style={{position:'absolute',top:10,left:12,fontSize:22,color:'rgba(212,175,55,0.5)',fontFamily:'serif'}}>✦</div>
-      <div style={{position:'absolute',top:10,right:12,fontSize:22,color:'rgba(212,175,55,0.5)',fontFamily:'serif'}}>✦</div>
-      <div style={{position:'absolute',bottom:10,left:12,fontSize:22,color:'rgba(212,175,55,0.5)',fontFamily:'serif'}}>✦</div>
-      <div style={{position:'absolute',bottom:10,right:12,fontSize:22,color:'rgba(212,175,55,0.5)',fontFamily:'serif'}}>✦</div>
-      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:14}}>
-        <div style={{flex:1,height:1,background:'linear-gradient(90deg,transparent,rgba(212,175,55,0.6),transparent)'}}/>
-        <span style={{color:'rgba(212,175,55,0.7)',fontSize:16,fontFamily:'Georgia,serif'}}>✠</span>
-        <div style={{flex:1,height:1,background:'linear-gradient(90deg,transparent,rgba(212,175,55,0.6),transparent)'}}/>
-      </div>
-      <div style={{textAlign:'center',marginBottom:6}}>
-        <div style={{fontFamily:'"Palatino Linotype","Book Antiqua",Palatino,serif',fontSize:38,fontWeight:400,color:'#D4AF37',letterSpacing:'0.08em',textShadow:'0 2px 12px rgba(212,175,55,0.4)',lineHeight:1.1,fontStyle:'italic'}}>
-          ✦ AIRTECH ERP ✦
-        </div>
-        <div style={{fontFamily:'"Palatino Linotype","Book Antiqua",Palatino,serif',fontSize:15,fontWeight:400,color:'rgba(212,175,55,0.75)',letterSpacing:'0.35em',textTransform:'uppercase',marginTop:6}}>
-          Inventory Management
-        </div>
-      </div>
-      <div style={{display:'flex',alignItems:'center',gap:12,marginTop:14}}>
-        <div style={{flex:1,height:1,background:'linear-gradient(90deg,transparent,rgba(212,175,55,0.6),transparent)'}}/>
-        <span style={{color:'rgba(212,175,55,0.7)',fontSize:12,fontFamily:'Georgia,serif',letterSpacing:'0.2em'}}>· STOCK MODULE ·</span>
-        <div style={{flex:1,height:1,background:'linear-gradient(90deg,transparent,rgba(212,175,55,0.6),transparent)'}}/>
-      </div>
-      <div style={{position:'absolute',top:16,right:48,fontSize:11,fontWeight:700,color:synced?'#6ee7a0':'#f87171',letterSpacing:'0.08em'}}>
-        {synced?'● SYNCED':'● OFFLINE'}
-      </div>
-    </div>
-  );
-}
 
 const StockModule: React.FC = () => {
   const [form,setForm]=useState<RecordForm>({...EMPTY_FORM});
@@ -146,7 +115,11 @@ const StockModule: React.FC = () => {
   const [itemMasterState,setItemMasterState]=useState<any[]>([]);
   const [draftPsirItems,setDraftPsirItems]=useState<any[]>([]);
   const [filterText,setFilterText]=useState('');
-  const [showFilters,setShowFilters]=useState(false);
+
+  // ── NEW: Item search state for the form dropdown ──────────────────────────
+  const [itemSearch,setItemSearch]=useState('');
+  const [showItemDropdown,setShowItemDropdown]=useState(false);
+
   const unsubsRef=useRef<Array<()=>void>>([]);
 
   const showToast=useCallback((msg:string,type:Toast['type']='info')=>{
@@ -206,9 +179,18 @@ const StockModule: React.FC = () => {
 
   const normalize=useCallback((s:any)=>s==null?'':String(s).trim().toLowerCase(),[]);
 
+  // ── Filtered items for searchable dropdown ────────────────────────────────
+  const filteredItemOptions=useMemo(()=>{
+    if(!itemSearch.trim())return itemMasterState;
+    const q=itemSearch.trim().toLowerCase();
+    return itemMasterState.filter(item=>
+      (item.itemName||'').toLowerCase().includes(q)||
+      (item.itemCode||'').toLowerCase().includes(q)
+    );
+  },[itemMasterState,itemSearch]);
+
   // ── Maps ──────────────────────────────────────────────────────────────────
 
-  // Raw total sent to vendor via Vendor Issue module
   const vendorIssuedMap=useMemo(()=>{
     const m=new Map<string,number>();
     for(const issue of vendorIssuesState){
@@ -225,7 +207,6 @@ const StockModule: React.FC = () => {
 
   const getVendorIssuedQtyTotal=useCallback((c:string)=>vendorIssuedMap.get(String(c).trim())||0,[vendorIssuedMap]);
 
-  // Total returned from vendor via VSIR (ok+rework+reject)
   const vsirReceivedMap=useMemo(()=>{
     const m=new Map<string,number>();
     for(const r of vsirRecordsState){
@@ -238,7 +219,6 @@ const StockModule: React.FC = () => {
 
   const getVSIRReceivedQtyTotal=useCallback((c:string)=>vsirReceivedMap.get(String(c).trim())||0,[vsirReceivedMap]);
 
-  // Net qty still outstanding at vendor (not yet returned)
   const getAdjustedVendorIssuedQty=useCallback((c:string)=>
     Math.max(0,getVendorIssuedQtyTotal(c)-getVSIRReceivedQtyTotal(c)),
   [getVendorIssuedQtyTotal,getVSIRReceivedQtyTotal]);
@@ -332,32 +312,26 @@ const StockModule: React.FC = () => {
 
   // ── Column calculations ───────────────────────────────────────────────────
 
-  // Items at vendor dept waiting to be sent for work
   const getVendorQty=useCallback((c:string)=>
     Math.max(0,(vendorDeptMap.qty.get(String(c).trim())||0)-getVendorIssuedQtyTotal(c)),
   [vendorDeptMap,getVendorIssuedQtyTotal]);
 
-  // Vendor-returned ok qty minus what's been re-issued internally (Vendor type)
   const getVendorOkQty=useCallback((c:string)=>
     Math.max(0,getVendorDeptOkQtyTotal(c)-getInHouseQtyByTxType(c,'Vendor')),
   [getVendorDeptOkQtyTotal,getInHouseQtyByTxType]);
 
-  // ★ FIX: Store stock received (PSIR) minus issued from store (Purchase type)
-  //   vendorIssuedTotal intentionally NOT subtracted — those items are at vendor,
-  //   tracked in vendorQty. They only return to stock via VSIR → vendorOkQty.
   const getPurStoreOkQty=useCallback((itemName:string,itemCode?:string)=>
     Math.max(0,
-      getPSIROkQtyTotal(itemName,itemCode)               // received into store via PSIR
-      - getInHouseQtyByTxType(itemCode||'','Purchase')   // issued from store (Purchase type)
-      // ← NO vendorIssuedTotal deduction here
+      getPSIROkQtyTotal(itemName,itemCode)
+      - getInHouseQtyByTxType(itemCode||'','Purchase')
     ),
   [getPSIROkQtyTotal,getInHouseQtyByTxType]);
 
   const computeClosingStock=useCallback((itemName:string,itemCode:string,stockQty:number)=>
     (Number(stockQty)||0)
-    +getPurStoreOkQty(itemName,itemCode)   // store ok qty
-    +getVendorOkQty(itemCode)              // vendor-returned ok qty
-    -getInHouseStockOnly(itemName,itemCode), // stock-type in-house issues
+    +getPurStoreOkQty(itemName,itemCode)
+    +getVendorOkQty(itemCode)
+    -getInHouseStockOnly(itemName,itemCode),
   [getPurStoreOkQty,getVendorOkQty,getInHouseStockOnly]);
 
   // ── Live preview ──────────────────────────────────────────────────────────
@@ -392,13 +366,21 @@ const StockModule: React.FC = () => {
 
   const handleChange=useCallback((e:React.ChangeEvent<HTMLInputElement|HTMLSelectElement>)=>{
     const{name,value,type}=e.target;
-    if(name==='itemName'){
-      const found=itemMasterState.find(item=>item.itemCode===value);
-      setForm(prev=>({...prev,itemName:found?found.itemName:'',itemCode:found?found.itemCode:''}));
-    }else{
-      setForm(prev=>({...prev,[name]:type==='number'?Number(value):value}));
-    }
-  },[itemMasterState]);
+    setForm(prev=>({...prev,[name]:type==='number'?Number(value):value}));
+  },[]);
+
+  // Select item from dropdown
+  const handleSelectItem=useCallback((item:any)=>{
+    setForm(prev=>({...prev,itemName:item.itemName||'',itemCode:item.itemCode||''}));
+    setItemSearch(item.itemName||'');
+    setShowItemDropdown(false);
+  },[]);
+
+  const resetForm=useCallback(()=>{
+    setForm({...EMPTY_FORM});
+    setItemSearch('');
+    setEditIdx(null);
+  },[]);
 
   const handleSubmit=useCallback(async(e:React.FormEvent)=>{
     e.preventDefault();
@@ -435,13 +417,16 @@ const StockModule: React.FC = () => {
         showToast('Record added (local)','info');
       }
     }
-    setForm({...EMPTY_FORM});
+    resetForm();
   },[form,editIdx,records,userUid,getIndentQtyTotal,getPurchaseQtyTotal,getVendorQty,
      getPurStoreOkQty,getVendorOkQty,getInHouseIssuedQtyByItemName,getAdjustedVendorIssuedQty,
-     computeClosingStock,showToast]);
+     computeClosingStock,showToast,resetForm]);
 
   const handleEdit=useCallback((idx:number)=>{
-    setForm({...records[idx]});setEditIdx(idx);window.scrollTo({top:0,behavior:'smooth'});
+    setForm({...records[idx]});
+    setItemSearch(records[idx].itemName||'');
+    setEditIdx(idx);
+    window.scrollTo({top:0,behavior:'smooth'});
   },[records]);
 
   const handleDelete=useCallback(async(idx:number)=>{
@@ -465,6 +450,7 @@ const StockModule: React.FC = () => {
         .sk-btn:hover{opacity:0.88;} .sk-row:hover td{background:#F7F8FF!important;}
         .sk-input:focus{border-color:#3B5BDB!important;box-shadow:0 0 0 3px rgba(59,91,219,0.12);}
         .sk-ghost:hover{background:#F7F8FC!important;border-color:#CBD2E0!important;}
+        .sk-dd-item:hover{background:#EEF2FF!important;}
         *{box-sizing:border-box;}
       `}</style>
       <ToastContainer toasts={toasts}/>
@@ -472,8 +458,7 @@ const StockModule: React.FC = () => {
       <div style={{background:S.bg,fontFamily:"'Geist','DM Sans',system-ui,sans-serif"}}>
         <div style={{maxWidth:1600,margin:'0 auto',padding:'24px 24px 32px'}}>
 
-          <CalligraphicHeader synced={!!userUid}/>
-
+          {/* ── Stat Cards ─────────────────────────────────────────────────── */}
           <div style={{display:'flex',gap:14,marginBottom:24,flexWrap:'wrap'}}>
             <StatCard label="Stock Items" value={records.length}/>
             <StatCard label="Item Master" value={itemMasterState.length} sub="available" color={itemMasterState.length===0?S.warning:S.textPrimary}/>
@@ -483,20 +468,89 @@ const StockModule: React.FC = () => {
             <StatCard label="Total Closing" value={totalClosing} color={totalClosing<0?S.danger:S.success} sub="across all items"/>
           </div>
 
+          {/* ── New / Edit Stock Record Form ───────────────────────────────── */}
           <div style={{...S.card,marginBottom:24}}>
             <h2 style={{margin:'0 0 20px',fontSize:16,fontWeight:700,color:S.textPrimary}}>
               {isEditing?'✎ Edit Stock Record':'New Stock Record'}
             </h2>
             <form onSubmit={handleSubmit}>
               <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:16}}>
-                <Field label="Item Name" style={{flex:'1 1 220px'}}>
-                  <select name="itemName" className="sk-input"
-                    style={{...S.input,borderColor:itemMasterState.length===0?S.warning:S.borderStrong}}
-                    value={form.itemCode} onChange={handleChange}>
-                    <option value="">{itemMasterState.length===0?'Item Master not loaded…':'Select item…'}</option>
-                    {itemMasterState.map(item=><option key={item.id||item.itemCode} value={item.itemCode}>{item.itemName}</option>)}
-                  </select>
+
+                {/* ── Searchable Item Name dropdown ──────────────────────── */}
+                <Field label="Item Name" style={{flex:'1 1 260px'}}>
+                  <div style={{position:'relative'}}>
+                    <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+                      <input
+                        className="sk-input"
+                        style={{
+                          ...S.input,
+                          width:'100%',
+                          paddingRight:32,
+                          borderColor:itemMasterState.length===0?S.warning:showItemDropdown?S.accent:S.borderStrong,
+                          boxShadow:showItemDropdown?`0 0 0 3px rgba(59,91,219,0.12)`:'none',
+                        }}
+                        placeholder={
+                          itemMasterState.length===0
+                            ?'Item Master not loaded…'
+                            :'Search item name or code…'
+                        }
+                        value={itemSearch}
+                        autoComplete="off"
+                        onChange={e=>{
+                          setItemSearch(e.target.value);
+                          setShowItemDropdown(true);
+                          // If user clears the search, clear the form selection too
+                          if(!e.target.value){
+                            setForm(prev=>({...prev,itemName:'',itemCode:''}));
+                          }
+                        }}
+                        onFocus={()=>setShowItemDropdown(true)}
+                        onBlur={()=>setTimeout(()=>setShowItemDropdown(false),160)}
+                      />
+                      {/* Search icon / clear button */}
+                      <span style={{
+                        position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',
+                        color:S.textMuted,fontSize:13,pointerEvents:itemSearch?'auto':'none',cursor:itemSearch?'pointer':'default',
+                      }}
+                        onMouseDown={e=>{e.preventDefault();setItemSearch('');setForm(prev=>({...prev,itemName:'',itemCode:''}));setShowItemDropdown(true);}}
+                      >
+                        {itemSearch?'✕':'⌕'}
+                      </span>
+                    </div>
+
+                    {/* Dropdown list */}
+                    {showItemDropdown&&(
+                      <div style={{
+                        position:'absolute',top:'calc(100% + 4px)',left:0,right:0,zIndex:1000,
+                        background:'#fff',border:`1px solid ${S.borderStrong}`,
+                        borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,0.13)',
+                        maxHeight:240,overflowY:'auto',
+                      }}>
+                        {filteredItemOptions.length===0?(
+                          <div style={{padding:'12px 14px',fontSize:13,color:S.textMuted,textAlign:'center'}}>
+                            {itemMasterState.length===0?'Item Master not loaded':'No items match'}
+                          </div>
+                        ):filteredItemOptions.map(item=>(
+                          <div
+                            key={item.id||item.itemCode}
+                            className="sk-dd-item"
+                            onMouseDown={e=>{e.preventDefault();handleSelectItem(item);}}
+                            style={{
+                              padding:'9px 14px',fontSize:14,cursor:'pointer',
+                              display:'flex',alignItems:'center',justifyContent:'space-between',
+                              borderBottom:`1px solid ${S.border}`,transition:'background 0.1s',
+                              background: form.itemCode===item.itemCode ? S.accentLight : '#fff',
+                            }}
+                          >
+                            <span style={{fontWeight:600,color:S.textPrimary}}>{item.itemName}</span>
+                            <span style={{fontSize:12,color:S.textMuted,fontFamily:'monospace',marginLeft:10,flexShrink:0}}>{item.itemCode}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </Field>
+
                 <Field label="Item Code">
                   <input style={{...S.inputDisabled,width:130}} value={form.itemCode} readOnly placeholder="Auto-filled"/>
                 </Field>
@@ -548,14 +602,19 @@ const StockModule: React.FC = () => {
                 <button type="submit" className="sk-btn" style={S.btnSuccess}>
                   {isEditing?'✓ Update Record':'✓ Add Record'}
                 </button>
-                {isEditing&&<button type="button" className="sk-btn sk-ghost" style={S.btnGhost}
-                  onClick={()=>{setForm({...EMPTY_FORM});setEditIdx(null);}}>Cancel</button>}
-                {!isEditing&&<button type="button" className="sk-btn sk-ghost" style={S.btnGhost}
-                  onClick={()=>setForm({...EMPTY_FORM})}>Clear</button>}
+                {isEditing&&(
+                  <button type="button" className="sk-btn sk-ghost" style={S.btnGhost}
+                    onClick={resetForm}>Cancel</button>
+                )}
+                {!isEditing&&(
+                  <button type="button" className="sk-btn sk-ghost" style={S.btnGhost}
+                    onClick={resetForm}>Clear</button>
+                )}
               </div>
             </form>
           </div>
 
+          {/* ── Stock Records Table ────────────────────────────────────────── */}
           <div style={S.card}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16,flexWrap:'wrap',gap:10}}>
               <div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -564,23 +623,38 @@ const StockModule: React.FC = () => {
                   {filteredRecords.length} of {records.length} items
                 </span>
               </div>
-              <button className="sk-btn sk-ghost"
-                style={{...S.btnGhost,borderColor:showFilters?S.accent:S.border,color:showFilters?S.accent:S.textSecondary}}
-                onClick={()=>setShowFilters(f=>!f)}>Search</button>
-            </div>
 
-            {showFilters&&(
-              <div style={{background:S.bg,border:`1px solid ${S.border}`,borderRadius:8,padding:'14px 16px',marginBottom:16,display:'flex',gap:12,alignItems:'flex-end'}}>
-                <Field label="Search items">
-                  <input className="sk-input" style={{...S.input,minWidth:260}}
-                    placeholder="Item name, code, batch no…" value={filterText}
-                    onChange={e=>setFilterText(e.target.value)}/>
-                </Field>
-                {filterText&&<button className="sk-btn sk-ghost"
-                  style={{...S.btnGhost,alignSelf:'flex-end',color:S.danger,borderColor:'#FECACA'}}
-                  onClick={()=>setFilterText('')}>✕ Clear</button>}
+              {/* ── Always-visible search bar ────────────────────────────── */}
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div style={{position:'relative',display:'flex',alignItems:'center'}}>
+                  <span style={{
+                    position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',
+                    fontSize:14,color:S.textMuted,pointerEvents:'none',
+                  }}>⌕</span>
+                  <input
+                    className="sk-input"
+                    style={{
+                      ...S.input,
+                      paddingLeft:30,
+                      paddingRight:filterText?30:12,
+                      minWidth:260,
+                    }}
+                    placeholder="Search by name, code, batch…"
+                    value={filterText}
+                    onChange={e=>setFilterText(e.target.value)}
+                  />
+                  {filterText&&(
+                    <span
+                      style={{
+                        position:'absolute',right:10,top:'50%',transform:'translateY(-50%)',
+                        fontSize:13,color:S.textMuted,cursor:'pointer',
+                      }}
+                      onClick={()=>setFilterText('')}
+                    >✕</span>
+                  )}
+                </div>
               </div>
-            )}
+            </div>
 
             <div style={{overflowX:'auto',borderRadius:8,border:`1px solid ${S.border}`}}>
               <table style={{width:'100%',borderCollapse:'collapse',tableLayout:'auto'}}>

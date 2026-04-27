@@ -163,7 +163,7 @@ function App() {
           flex: 1; justify-content: center;
         }
         .erp-breadcrumb-sep { opacity: 0.35; }
-        .erp-breadcrumb-active { color: rgba(180,210,245,0.85); font-weight: 500; }
+        .erp-breadcrumb-active { color: #ffffff; font-weight: 600; text-shadow: 0 0 4px rgba(0,0,0,0.4); }
 
         .erp-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
